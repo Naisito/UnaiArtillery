@@ -1,0 +1,239 @@
+// ============================================================================
+//  WeaponCatalog.ts — Real-world weapon & munition definitions.
+//
+//  Port of core/WeaponCatalog.h upgraded to the P1.3 drag model: munitions are
+//  now defined by a standard drag function (G1/G7) plus a ballistic
+//  coefficient, the way real ballistic data is published. The BCs below are
+//  CALIBRATED against this solver so each weapon reproduces its published
+//  maximum range (see physics tests); treat them as engineering fits, not
+//  measured values.
+//
+//  Each factory also accepts variant 'legacy' returning the original
+//  hand-tuned explicit Cd(Mach) curve with every P1 feature off — that is the
+//  exact configuration the C++ core validated, and what the TS<->C++ parity
+//  tests run against.
+// ============================================================================
+import { Munition } from './Munition';
+
+export type WeaponId = 'mortar120' | 'm777' | 'gmlrs' | 'tacticalMissile';
+export type CatalogVariant = 'bc' | 'legacy';
+
+/** A propellant "charge" (zone): same shell, different muzzle velocity. */
+export interface ChargeZone {
+  name: string;
+  muzzleVelocity: number; // m/s
+}
+
+export class Weapon {
+  name = '';
+  category: 'Mortar' | 'Howitzer' | 'Rocket' | 'Missile' = 'Howitzer';
+  minElevationDeg = 0.0;
+  maxElevationDeg = 70.0;
+  traverseDeg = 360.0;
+  reloadTime = 5.0; // s between rounds (rough)
+  round = new Munition();
+  charges: ChargeZone[] = []; // empty => single fixed velocity
+
+  clone(): Weapon {
+    const w = new Weapon();
+    Object.assign(w, this);
+    w.round = this.round.clone();
+    w.charges = this.charges.map((c) => ({ ...c }));
+    return w;
+  }
+}
+
+export class WeaponCatalog {
+  // ---- Light/medium mortar: 120 mm --------------------------------------
+  // ~13 kg fin-stabilized bomb, high-angle only, ~7-8 km with top charge.
+  static mortar120(variant: CatalogVariant = 'bc'): Weapon {
+    const m = new Munition();
+    m.name = '120mm HE Bomb';
+    m.mass = 13.0;
+    m.diameter = 0.12;
+    m.muzzleVelocity = 318.0;
+    m.warheadMassTNTeq = 2.9;
+    if (variant === 'legacy') {
+      // Original hand-tuned curve (C++ parity configuration).
+      m.dragCurve = [
+        { mach: 0.0, cd: 0.14 }, { mach: 0.6, cd: 0.15 }, { mach: 0.9, cd: 0.22 },
+        { mach: 1.0, cd: 0.40 }, { mach: 1.2, cd: 0.38 }, { mach: 1.5, cd: 0.33 },
+        { mach: 2.0, cd: 0.30 },
+      ];
+    } else {
+      // Blunt fin-stabilized bomb: G1 shape. BC calibrated to ~6.4 km max
+      // (tools/calibrate_bc.ts). Fin-stabilized: no spin.
+      m.dragModel = 'G1';
+      m.ballisticCoefficient = 1.65;
+    }
+    const w = new Weapon();
+    w.name = '120mm Heavy Mortar';
+    w.category = 'Mortar';
+    w.minElevationDeg = 45.0; // mortars are high-angle weapons
+    w.maxElevationDeg = 85.0;
+    w.traverseDeg = 12.0;
+    w.reloadTime = 4.0;
+    w.round = m;
+    w.charges = [
+      { name: 'Charge 0', muzzleVelocity: 110.0 },
+      { name: 'Charge 2', muzzleVelocity: 190.0 },
+      { name: 'Charge 4', muzzleVelocity: 265.0 },
+      { name: 'Charge 6 (max)', muzzleVelocity: 318.0 },
+    ];
+    return w;
+  }
+
+  // ---- Field howitzer: M777 155 mm ---------------------------------------
+  // M107 HE ~43.2 kg, Charge 8 muzzle ~684 m/s, ~24 km max range.
+  static m777(variant: CatalogVariant = 'bc'): Weapon {
+    const m = new Munition();
+    m.name = 'M107 155mm HE';
+    m.mass = 43.2;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 6.6;
+    if (variant === 'legacy') {
+      m.dragCurve = [
+        { mach: 0.0, cd: 0.10 }, { mach: 0.7, cd: 0.11 }, { mach: 0.9, cd: 0.15 },
+        { mach: 1.0, cd: 0.28 }, { mach: 1.2, cd: 0.26 }, { mach: 2.0, cd: 0.21 },
+        { mach: 3.0, cd: 0.18 },
+      ];
+    } else {
+      // Boat-tailed HE shell: G7 shape. BC calibrated to keep the validated
+      // ~21 km (this solver's ISA, QE sweep) inside the published 20-28 km
+      // (tools/calibrate_bc.ts).
+      m.dragModel = 'G7';
+      m.ballisticCoefficient = 3.69;
+      // P1.2: rifled gun — 1 turn in 20 calibers, right-hand twist.
+      m.spinStabilized = true;
+      m.twistCalibers = 20.0;
+      m.rightHandTwist = true;
+    }
+    const w = new Weapon();
+    w.name = 'M777 155mm Howitzer';
+    w.category = 'Howitzer';
+    w.minElevationDeg = 0.0;
+    w.maxElevationDeg = 71.7;
+    w.traverseDeg = 45.0;
+    w.reloadTime = 8.0;
+    w.round = m;
+    w.charges = [
+      { name: 'Charge 3', muzzleVelocity: 310.0 },
+      { name: 'Charge 5', muzzleVelocity: 470.0 },
+      { name: 'Charge 7', muzzleVelocity: 585.0 },
+      { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
+    ];
+    return w;
+  }
+
+  // ---- Rocket artillery: HIMARS / GMLRS (M31) -----------------------------
+  // 227 mm guided rocket, ~307 kg launch, solid motor, ~70+ km range.
+  static himarsGMLRS(variant: CatalogVariant = 'bc'): Weapon {
+    const m = new Munition();
+    m.name = 'GMLRS M31 227mm';
+    m.mass = 307.0; // launch mass incl. propellant
+    m.diameter = 0.227;
+    m.muzzleVelocity = 35.0; // leaves the tube slowly, then accelerates
+    m.warheadMassTNTeq = 40.0; // ~90 kg class unitary warhead
+    m.motor.enabled = true;
+    m.motor.thrust = 66000.0; // N (approx sustained), tuned to ~70 km
+    m.motor.burnTime = 4.5; // s
+    m.motor.propellantMass = 98.0; // kg expelled during burn
+    if (variant === 'legacy') {
+      m.dragCurve = [
+        { mach: 0.0, cd: 0.20 }, { mach: 0.8, cd: 0.22 }, { mach: 1.0, cd: 0.45 },
+        { mach: 1.5, cd: 0.40 }, { mach: 2.5, cd: 0.34 }, { mach: 4.0, cd: 0.30 },
+      ];
+    } else {
+      // Long finned rocket: G7 shape. BC calibrated to hold ~68 km max range
+      // (tools/calibrate_bc.ts).
+      m.dragModel = 'G7';
+      m.ballisticCoefficient = 7.67;
+      // P1.5: it is a *guided* rocket — Pro-Nav terminal guidance.
+      m.guidance.enabled = true;
+      m.guidance.navConstant = 3.5;
+      m.guidance.maxLateralG = 8.0;
+    }
+    const w = new Weapon();
+    w.name = 'HIMARS / GMLRS';
+    w.category = 'Rocket';
+    w.minElevationDeg = 25.0;
+    w.maxElevationDeg = 60.0;
+    w.traverseDeg = 360.0;
+    w.reloadTime = 3.0; // ripple fire between rockets
+    w.round = m;
+    w.charges = []; // rocket: fixed motor, no charge zones
+    return w;
+  }
+
+  // ---- Tactical ballistic missile (ATACMS-class) --------------------------
+  // Large solid rocket, steep ballistic arc, ~300 km class. Long-range shots
+  // should be solved with SolverConfig.sphericalEarth = true (P1.4).
+  static tacticalMissile(variant: CatalogVariant = 'bc'): Weapon {
+    const m = new Munition();
+    m.name = 'Tactical Ballistic Missile';
+    m.mass = 1670.0;
+    m.diameter = 0.61;
+    m.muzzleVelocity = 25.0;
+    m.warheadMassTNTeq = 230.0;
+    m.motor.enabled = true;
+    if (variant === 'legacy') {
+      // C++ mirror. NOTE: this motor has an effective exhaust velocity of
+      // 7000 m/s (unphysical) and flies ~2000 km — the C++ catalog never
+      // validated the missile. Kept verbatim for parity only.
+      m.motor.thrust = 350000.0;
+      m.motor.burnTime = 18.0;
+      m.motor.propellantMass = 900.0;
+      m.dragCurve = [
+        { mach: 0.0, cd: 0.18 }, { mach: 0.9, cd: 0.20 }, { mach: 1.0, cd: 0.42 },
+        { mach: 2.0, cd: 0.32 }, { mach: 4.0, cd: 0.26 }, { mach: 6.0, cd: 0.22 },
+      ];
+    } else {
+      // Solid motor with realistic specific impulse (~Isp 265 s, exhaust
+      // velocity ~2600 m/s): dv = 2600*ln(1670/740) ~ 2.1 km/s, leaving
+      // ~1.8 km/s after gravity+drag losses — a ~300 km-class ballistic arc.
+      // Burn 16 s at ~9 g initial acceleration.
+      m.motor.thrust = 151000.0;
+      m.motor.burnTime = 16.0;
+      m.motor.propellantMass = 930.0;
+      m.dragModel = 'G7';
+      m.ballisticCoefficient = 11.56; // calibrated with tools/calibrate_bc.ts
+      m.guidance.enabled = true;
+      m.guidance.navConstant = 3.0;
+      m.guidance.maxLateralG = 5.0;
+      m.guidance.activationDelay = 5.0; // coast a bit after burnout
+    }
+    const w = new Weapon();
+    w.name = 'Tactical Ballistic Missile';
+    w.category = 'Missile';
+    w.minElevationDeg = 30.0;
+    w.maxElevationDeg = 80.0;
+    w.traverseDeg = 360.0;
+    w.reloadTime = 20.0;
+    w.round = m;
+    w.charges = [];
+    return w;
+  }
+
+  static get(id: WeaponId, variant: CatalogVariant = 'bc'): Weapon {
+    switch (id) {
+      case 'mortar120': return WeaponCatalog.mortar120(variant);
+      case 'm777': return WeaponCatalog.m777(variant);
+      case 'gmlrs': return WeaponCatalog.himarsGMLRS(variant);
+      case 'tacticalMissile': return WeaponCatalog.tacticalMissile(variant);
+    }
+  }
+
+  static all(variant: CatalogVariant = 'bc'): Weapon[] {
+    return [
+      WeaponCatalog.mortar120(variant),
+      WeaponCatalog.m777(variant),
+      WeaponCatalog.himarsGMLRS(variant),
+      WeaponCatalog.tacticalMissile(variant),
+    ];
+  }
+
+  static ids(): WeaponId[] {
+    return ['mortar120', 'm777', 'gmlrs', 'tacticalMissile'];
+  }
+}

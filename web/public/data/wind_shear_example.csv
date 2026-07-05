@@ -1,0 +1,11 @@
+# Perfil de viento con cizalladura (ejemplo educativo, P1.7).
+# El viento rota y arrecia con la altitud: en superficie sopla suave del Oeste;
+# a 6 km sopla fuerte del Sur; a 12 km es un chorro del Suroeste.
+# columnas: altitud_m, velocidad_ms, rumbo_desde_deg (0=N, 90=E)
+altitude_m,speed_ms,from_bearing_deg
+0,4,270
+1500,8,240
+3000,12,210
+6000,18,180
+9000,26,200
+12000,38,225

@@ -1,0 +1,159 @@
+// ============================================================================
+//  main.ts — Ensamblaje de la aplicación.
+//
+//  Globo Cesium + overlay Three + servicio balístico (core TS validado) +
+//  pieza de artillería + cámaras + HUD/meteo. El bucle: la física de un tiro
+//  se resuelve UNA vez (async, muestreando el terreno) y los presentadores
+//  solo reproducen; cada frame actualiza presentadores, VFX y cámara.
+// ============================================================================
+import * as Cesium from 'cesium';
+import { createViewer } from './viewer';
+import { BallisticsService } from './BallisticsService';
+import { ThreeOverlay } from './render/ThreeOverlay';
+import { maybeAttachBloom } from './render/PostFX';
+import { VfxManager } from './vfx/effects';
+import { AudioBoom } from './vfx/AudioBoom';
+import { TrajectoryPreview } from './TrajectoryPreview';
+import { CameraDirector } from './CameraDirector';
+import { ArtilleryPiece } from './ArtilleryPiece';
+import { ControlPanel } from './ui/ControlPanel';
+import { WeatherPanel } from './ui/Weather';
+import { HUD } from './ui/HUD';
+import { toast } from './ui/toast';
+import { Vec3 } from './ballistics';
+
+type PickMode = 'none' | 'target' | 'battery';
+
+async function boot(): Promise<void> {
+  const viewer = await createViewer('cesiumContainer');
+  const service = new BallisticsService(viewer);
+  await service.setBattery(-3.9, 40.75); // Sierra de Guadarrama
+
+  const overlay = new ThreeOverlay(viewer, service.frame);
+  maybeAttachBloom(overlay);
+  const vfx = new VfxManager(overlay.enuRoot, (pos) => service.atmo.windAt(pos, 0));
+  const audio = new AudioBoom();
+  const preview = new TrajectoryPreview(viewer, () => service.frame);
+  const director = new CameraDirector(viewer, service);
+  const hud = new HUD();
+
+  let pickMode: PickMode = 'none';
+  let piece: ArtilleryPiece;
+
+  const panel = new ControlPanel({
+    onAimChanged: () => piece.schedulePreview(),
+    onWeaponChanged: () => {
+      piece.clearTarget();
+      piece.schedulePreview(0);
+    },
+    onFire: () => void piece.fire(),
+    onMRSI: (n) => void piece.fireMRSI(n),
+    onCompare: () => void piece.compare(),
+    onCameraMode: (mode) => {
+      if (mode === 'follow') {
+        if (!piece.followLatest()) {
+          toast('No hay proyectil que seguir todavía — dispara primero');
+          panel.markCamera(director.mode === 'follow' ? 'free' : director.mode);
+          return;
+        }
+      } else {
+        director.setMode(mode);
+      }
+      if (mode === 'orbital') director.setFocus(new Vec3(0, 0, 60));
+      if (mode === 'free') flyToBattery(false);
+    },
+    onPickTarget: (active) => {
+      pickMode = active ? 'target' : 'none';
+      if (active) toast('Clic en el globo para marcar el objetivo');
+    },
+    onMoveBattery: (active) => {
+      pickMode = active ? 'battery' : 'none';
+      if (active) toast('Clic en el globo para desplegar la batería ahí');
+    },
+  });
+
+  piece = new ArtilleryPiece(service, overlay, vfx, audio, preview, director, panel, hud);
+  const weather = new WeatherPanel(service);
+  weather.onChange = () => piece.schedulePreview(250);
+
+  // -- Picking sobre el globo ------------------------------------------------
+  const pickEcef = (windowPos: Cesium.Cartesian2): Cesium.Cartesian3 | undefined => {
+    const scene = viewer.scene;
+    if (scene.pickPositionSupported) {
+      const p = scene.pickPosition(windowPos);
+      if (Cesium.defined(p)) return p;
+    }
+    const ray = viewer.camera.getPickRay(windowPos);
+    return ray ? scene.globe.pick(ray, scene) : undefined;
+  };
+
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction((ev: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
+    if (pickMode === 'none') return;
+    const ecef = pickEcef(ev.position);
+    if (!ecef) {
+      toast('Ahí no hay globo que picar');
+      return;
+    }
+    if (pickMode === 'target') {
+      pickMode = 'none';
+      panel.setPickActive(false);
+      void piece.aimAt(service.frame.ecefToEnu(ecef));
+    } else {
+      pickMode = 'none';
+      panel.setBatteryActive(false);
+      const carto = Cesium.Cartographic.fromCartesian(ecef);
+      void (async () => {
+        await service.setBattery(
+          Cesium.Math.toDegrees(carto.longitude),
+          Cesium.Math.toDegrees(carto.latitude),
+        );
+        overlay.setFrame(service.frame);
+        preview.clearAll();
+        piece.clearTarget();
+        piece.schedulePreview(0);
+        flyToBattery(true);
+        toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
+      })();
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+  // -- Cámara inicial ----------------------------------------------------------
+  function flyToBattery(fast: boolean): void {
+    const f = service.frame;
+    viewer.camera.flyTo({
+      destination: f.enuToEcef(new Vec3(-900, -900, 500)),
+      orientation: {
+        direction: Cesium.Cartesian3.normalize(
+          f.enuVectorToEcef(new Vec3(0.62, 0.62, -0.28)), new Cesium.Cartesian3(),
+        ),
+        up: Cesium.Cartesian3.normalize(
+          f.enuVectorToEcef(new Vec3(0.2, 0.2, 0.96)), new Cesium.Cartesian3(),
+        ),
+      },
+      duration: fast ? 1.2 : 2.8,
+    });
+  }
+  flyToBattery(false);
+
+  // -- Bucle -------------------------------------------------------------------
+  let last = performance.now();
+  viewer.clock.onTick.addEventListener(() => {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    piece.update(dt);
+    vfx.update(dt, overlay.cameraEnu());
+    director.update(dt);
+  });
+  viewer.scene.postRender.addEventListener(() => overlay.render());
+
+  // Primer arco al arrancar.
+  piece.schedulePreview(400);
+  console.log('[UnaiArtillery] listo — física validada, globo real, fuego a discreción');
+}
+
+boot().catch((err) => {
+  console.error('[UnaiArtillery] fallo de arranque', err);
+  toast('Fallo de arranque — mira la consola');
+});

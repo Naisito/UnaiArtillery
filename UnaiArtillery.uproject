@@ -1,0 +1,40 @@
+{
+    "FileVersion": 3,
+    "EngineAssociation": "5.4",
+    "Category": "Simulation",
+    "Description": "Sandbox Balístico 3D — hyperrealistic real-world artillery simulator.",
+    "Modules": [
+        {
+            "Name": "UnaiArtillery",
+            "Type": "Runtime",
+            "LoadingPhase": "Default",
+            "AdditionalDependencies": [
+                "Engine",
+                "Niagara"
+            ]
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "Niagara",
+            "Enabled": true
+        },
+        {
+            "Name": "CesiumForUnreal",
+            "Enabled": true,
+            "MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/cesium-for-unreal"
+        },
+        {
+            "Name": "EnhancedInput",
+            "Enabled": true
+        },
+        {
+            "Name": "GameplayCameras",
+            "Enabled": true
+        },
+        {
+            "Name": "ModelingToolsEditorMode",
+            "Enabled": true
+        }
+    ]
+}

@@ -1,0 +1,18 @@
+# Binarios locales de validación C++
+build/
+
+# Node / web (web/.gitignore cubre lo suyo, esto es cinturón y tirantes)
+node_modules/
+dist/
+.env
+
+# Unreal (capa legado)
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+*.sln
+
+# SO
+Thumbs.db
+.DS_Store
