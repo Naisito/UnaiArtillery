@@ -213,6 +213,76 @@ describe('P-NEXT.4 — arsenal ampliado (banda ±20% del alcance publicado)', ()
 });
 
 // ---------------------------------------------------------------------------
+describe('P-PRO.4 — base bleed y cohete auxiliar (RAP)', () => {
+  /** L39 (M109) con la munición dada montada. */
+  const onL39 = (round: () => import('./Munition').Munition) => {
+    const w = WeaponCatalog.m109Paladin();
+    w.round = round();
+    return w;
+  };
+
+  it('(a) el MISMO proyectil con BB on/off gana 20-35% de alcance', () => {
+    const on = onL39(WeaponCatalog.m795BaseBleed);
+    const off = onL39(WeaponCatalog.m795BaseBleed);
+    off.round.baseBleed.enabled = false;
+    const rOn = maxRange(on, 3);
+    const rOff = maxRange(off, 3);
+    const gain = rOn / rOff - 1;
+    expect(gain).toBeGreaterThan(0.20);
+    expect(gain).toBeLessThan(0.35);
+  });
+
+  it('(b) ignitionDelay=0 reproduce exactamente el motor clásico; >0 cambia el tiro', () => {
+    const atmo = new Atmosphere();
+    const cfg = SolverConfig.with({ dt: 0.005, enableCoriolis: true, latitudeDeg: 40.0 });
+    const fc = new WeaponSystem(atmo, cfg);
+
+    // GMLRS: motor clásico (delay 0 implícito). Ponerlo explícito no mueve
+    // NI UN BIT la integración.
+    const base = WeaponCatalog.himarsGMLRS();
+    const explicit = WeaponCatalog.himarsGMLRS();
+    explicit.round.motor.ignitionDelayS = 0.0;
+    const order = { azimuthDeg: 90.0, elevationDeg: 45.0, chargeIndex: -1 };
+    const a = fc.fire(base, new Vec3(), order);
+    const b = fc.fire(explicit, new Vec3(), order);
+    expect(b.downrange).toBe(a.downrange);
+    expect(b.apex).toBe(a.apex);
+    expect(b.timeOfFlight).toBe(a.timeOfFlight);
+    expect(b.impactPoint.x).toBe(a.impactPoint.x);
+    expect(b.impactPoint.y).toBe(a.impactPoint.y);
+
+    // El RAP con ignición a los 7 s vuela distinto que con ignición inmediata
+    // (quemar a menor velocidad/altitud cambia alcance y ápice de forma medible).
+    const rapNow = onL39(WeaponCatalog.m549Rap);
+    rapNow.round.motor.ignitionDelayS = 0.0;
+    const rapDelayed = onL39(WeaponCatalog.m549Rap);
+    const orderRap = { azimuthDeg: 90.0, elevationDeg: 45.0, chargeIndex: 3 };
+    const now = fc.fire(rapNow, new Vec3(), orderRap);
+    const delayed = fc.fire(rapDelayed, new Vec3(), orderRap);
+    expect(Math.abs(delayed.downrange - now.downrange)).toBeGreaterThan(300);
+    expect(Math.abs(delayed.apex - now.apex)).toBeGreaterThan(100);
+  });
+
+  it('(c) M795E-BB ~28.5 km y M549A1 RAP ~30 km desde L39 (±20%)', () => {
+    const rBB = maxRange(onL39(WeaponCatalog.m795BaseBleed), 3);
+    expect(rBB).toBeGreaterThan(28500 * 0.8);
+    expect(rBB).toBeLessThan(28500 * 1.2);
+
+    const rRAP = maxRange(onL39(WeaponCatalog.m549Rap), 3);
+    expect(rRAP).toBeGreaterThan(30000 * 0.8);
+    expect(rRAP).toBeLessThan(30000 * 1.2);
+
+    // Y ambas están cableadas como munición seleccionable en los dos L39.
+    for (const w of [WeaponCatalog.m777(), WeaponCatalog.m109Paladin()]) {
+      expect(w.rounds?.length).toBe(3);
+      expect(w.rounds?.[0].name).toBe(w.round.name);
+      expect(w.rounds?.[1].baseBleed.enabled).toBe(true);
+      expect(w.rounds?.[2].motor.ignitionDelayS).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('P1.2 — spin drift + Magnus', () => {
   // Fire due East at QE 45, no wind, Coriolis OFF to isolate the spin terms.
   function spinShot(rightHand: boolean, spinOn = true) {

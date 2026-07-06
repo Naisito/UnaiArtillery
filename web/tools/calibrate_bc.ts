@@ -52,6 +52,25 @@ const ENTRIES: Entry[] = [
   { key: 'excalibur', make: () => WeaponCatalog.excalibur(), chargeIndex: -1, targetM: 40000, bcLo: 4.0, bcHi: 60.0 },
   { key: 'gmlrs', make: () => WeaponCatalog.himarsGMLRS(), chargeIndex: -1, targetM: 68381, bcLo: 3.0, bcHi: 16.0 },
   { key: 'm26', make: () => WeaponCatalog.m26MLRS(), chargeIndex: -1, targetM: 32000, bcLo: 1.0, bcHi: 12.0 },
+  // P-PRO.4 — municiones 155 mm extendidas, calibradas desde un L39 (M109).
+  {
+    key: 'm795bb',
+    make: () => {
+      const w = WeaponCatalog.m109Paladin();
+      w.round = WeaponCatalog.m795BaseBleed();
+      return w;
+    },
+    chargeIndex: 3, targetM: 28500, bcLo: 1.5, bcHi: 16.0,
+  },
+  {
+    key: 'm549rap',
+    make: () => {
+      const w = WeaponCatalog.m109Paladin();
+      w.round = WeaponCatalog.m549Rap();
+      return w;
+    },
+    chargeIndex: 3, targetM: 30000, bcLo: 1.5, bcHi: 16.0,
+  },
   {
     key: 'ergmlrs', make: () => WeaponCatalog.erGMLRS(), chargeIndex: -1, targetM: 150000,
     bcLo: 4.0, bcHi: 30.0, spherical: true, maxFlight: 700, dt: 0.01,

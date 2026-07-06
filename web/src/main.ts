@@ -49,7 +49,12 @@ async function boot(): Promise<void> {
   const panel = new ControlPanel({
     onAimChanged: () => piece.schedulePreview(),
     onWeaponChanged: () => {
+      service.roundIndex = 0; // P-PRO.4 — arma nueva, munición estándar
       piece.clearTarget();
+      piece.schedulePreview(0);
+    },
+    onRoundChanged: (index) => {
+      service.roundIndex = index; // P-PRO.4 — el worker integra ESTA munición
       piece.schedulePreview(0);
     },
     onFire: () => void piece.fire(),

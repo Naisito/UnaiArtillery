@@ -11,6 +11,8 @@ import type { CameraMode } from '../CameraDirector';
 export interface ControlCallbacks {
   onAimChanged(): void;
   onWeaponChanged(): void;
+  /** P-PRO.4 — cambio de munición (índice en Weapon.rounds). */
+  onRoundChanged(index: number): void;
   onFire(): void;
   onMRSI(rounds: number): void;
   onCompare(): void;
@@ -40,10 +42,13 @@ const WEAPON_LABELS: Record<WeaponId, string> = {
 export class ControlPanel {
   weaponId: WeaponId = 'm777';
   chargeIndex = 3;
+  /** P-PRO.4 — índice de munición en Weapon.rounds (0 = estándar). */
+  roundIndex = 0;
   azimuthDeg = 90;
   elevationDeg = 45;
   preferHighAngle = false;
 
+  private roundSelect!: HTMLSelectElement;
   private chargeSelect!: HTMLSelectElement;
   private azInput!: HTMLInputElement;
   private azOut!: HTMLOutputElement;
@@ -76,11 +81,21 @@ export class ControlPanel {
     weaponSel.value = this.weaponId;
     weaponSel.onchange = () => {
       this.weaponId = weaponSel.value as WeaponId;
+      this.rebuildRounds();
       this.rebuildCharges();
       this.applyWeaponLimits();
       this.cb.onWeaponChanged();
     };
     el.appendChild(weaponSel);
+
+    // P-PRO.4 — selector de munición; solo visible si el arma ofrece >1.
+    this.roundSelect = document.createElement('select');
+    this.roundSelect.title = 'Munición: estándar, base bleed o cohete auxiliar (RAP)';
+    this.roundSelect.onchange = () => {
+      this.roundIndex = Number(this.roundSelect.value);
+      this.cb.onRoundChanged(this.roundIndex);
+    };
+    el.appendChild(this.roundSelect);
 
     this.chargeSelect = document.createElement('select');
     this.chargeSelect.onchange = () => {
@@ -243,6 +258,7 @@ export class ControlPanel {
       this.cb.onGoogleTiles(!this.googleBtn.classList.contains('toggled'));
     el.appendChild(this.googleBtn);
 
+    this.rebuildRounds();
     this.rebuildCharges();
     this.applyWeaponLimits();
   }
@@ -252,7 +268,29 @@ export class ControlPanel {
     this.googleBtn.classList.toggle('toggled', on);
   }
 
-  weapon(): Weapon { return WeaponCatalog.get(this.weaponId); }
+  /** Arma con la munición seleccionada aplicada (P-PRO.4). */
+  weapon(): Weapon {
+    const w = WeaponCatalog.get(this.weaponId);
+    const alt = w.rounds?.[this.roundIndex];
+    if (alt) w.round = alt;
+    return w;
+  }
+
+  /** P-PRO.4 — repuebla el selector de munición (oculto si no hay opciones). */
+  private rebuildRounds(): void {
+    const w = WeaponCatalog.get(this.weaponId);
+    this.roundIndex = 0;
+    this.roundSelect.innerHTML = '';
+    const rounds = w.rounds ?? [];
+    this.roundSelect.style.display = rounds.length > 1 ? '' : 'none';
+    rounds.forEach((r, i) => {
+      const opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = `${r.name} · ${r.mass.toFixed(1)} kg`;
+      this.roundSelect.appendChild(opt);
+    });
+    this.roundSelect.value = '0';
+  }
 
   private rebuildCharges(): void {
     const w = this.weapon();

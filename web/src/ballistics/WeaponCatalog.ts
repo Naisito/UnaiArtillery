@@ -37,17 +37,71 @@ export class Weapon {
   reloadTime = 5.0; // s between rounds (rough)
   round = new Munition();
   charges: ChargeZone[] = []; // empty => single fixed velocity
+  /**
+   * P-PRO.4 — municiones alternativas seleccionables (rounds[0] es la
+   * estándar, == round). El panel muestra el selector solo si hay >1.
+   */
+  rounds?: Munition[];
 
   clone(): Weapon {
     const w = new Weapon();
     Object.assign(w, this);
     w.round = this.round.clone();
     w.charges = this.charges.map((c) => ({ ...c }));
+    w.rounds = this.rounds?.map((r) => r.clone());
     return w;
   }
 }
 
 export class WeaponCatalog {
+  // ==========================================================================
+  //  P-PRO.4 — municiones 155 mm de alcance extendido (compartidas por los
+  //  obuses L39: M777 y M109A7). BCs calibrados con tools/calibrate_bc.ts.
+  // ==========================================================================
+
+  /** M795E-BB: proyectil base bleed (~28.5 km desde L39). El dragFactor 0.5
+   *  es un fit AGREGADO: además de rellenar la depresión del culote (base
+   *  drag ~25-35% del total), absorbe la mejora de forma del casco BB frente
+   *  al mismo casco sin BB — con él la ganancia on/off queda ~24%, dentro de
+   *  la banda publicada (M795 22.5 km → M795E-BB 28.5 km ≈ +27%). */
+  static m795BaseBleed(): Munition {
+    const m = new Munition();
+    m.name = 'M795E-BB (base bleed)';
+    m.mass = 46.7;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 10.8; // IMX-101 ~10.8 kg
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 4.67; // calibrado: ~28.5 km con BB activo (L39)
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0;
+    m.rightHandTwist = true;
+    m.baseBleed = { enabled: true, durationS: 25.0, dragFactor: 0.5 };
+    return m;
+  }
+
+  /** M549A1 RAP: cohete auxiliar de ~12 kN·s que enciende a los 7 s de vuelo
+   *  (~30 km desde L39). */
+  static m549Rap(): Munition {
+    const m = new Munition();
+    m.name = 'M549A1 RAP';
+    m.mass = 43.5;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 7.3; // ~6.8 kg Comp-B
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 3.43; // calibrado: ~30 km con el motor (L39)
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0;
+    m.rightHandTwist = true;
+    m.motor.enabled = true;
+    m.motor.thrust = 4000.0;        // N — impulso total ~12 kN·s
+    m.motor.burnTime = 3.0;         // s
+    m.motor.propellantMass = 5.9;   // kg (Isp ~ 207 s)
+    m.motor.ignitionDelayS = 7.0;   // enciende en la fase ascendente
+    return m;
+  }
+
   // ---- Light/medium mortar: 120 mm --------------------------------------
   // ~13 kg fin-stabilized bomb, high-angle only, ~7-8 km with top charge.
   static mortar120(variant: CatalogVariant = 'bc'): Weapon {
@@ -127,6 +181,10 @@ export class WeaponCatalog {
       { name: 'Charge 7', muzzleVelocity: 585.0 },
       { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
     ];
+    if (variant !== 'legacy') {
+      // P-PRO.4 — munición seleccionable (la legacy queda pura para paridad).
+      w.rounds = [m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap()];
+    }
     return w;
   }
 
@@ -255,6 +313,8 @@ export class WeaponCatalog {
       { name: 'Charge 7', muzzleVelocity: 585.0 },
       { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
     ];
+    // P-PRO.4 — mismas municiones extendidas que el M777 (ambos L39).
+    w.rounds = [m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap()];
     return w;
   }
 

@@ -27,12 +27,30 @@ export class RocketMotor {
   thrust = 0.0;         // N, along the velocity vector while burning
   burnTime = 0.0;       // s
   propellantMass = 0.0; // kg expelled linearly over burnTime
+  /**
+   * P-PRO.4 — RAP: el motor enciende este tiempo DESPUÉS del disparo (s).
+   * El empuje va de ignitionDelayS a ignitionDelayS + burnTime. Con 0 la
+   * integración es bit a bit idéntica al modelo anterior.
+   */
+  ignitionDelayS = 0.0;
 
   clone(): RocketMotor {
     const m = new RocketMotor();
     Object.assign(m, this);
     return m;
   }
+}
+
+/**
+ * P-PRO.4 — base bleed: un generador de gas rellena la depresión del culote
+ * y reduce el arrastre de base mientras quema. Se modela como un único factor
+ * sobre Cd durante durationS (0.75 es un fit razonable: el base drag es
+ * ~25-35% del total en supersónico y el BB elimina la mayor parte).
+ */
+export interface BaseBleedSpec {
+  enabled: boolean;
+  durationS: number;   // s de quemado del generador de gas
+  dragFactor: number;  // Cd_efectivo = dragFactor·Cd mientras t < durationS
 }
 
 /** P1.5 — terminal guidance (proportional navigation) parameters. */
@@ -83,6 +101,9 @@ export class Munition {
   ];
 
   motor = new RocketMotor();
+
+  // -- P-PRO.4: base bleed -----------------------------------------------------
+  baseBleed: BaseBleedSpec = { enabled: false, durationS: 25.0, dragFactor: 0.75 };
 
   // -- P1.2: spin ------------------------------------------------------------
   /** Spin-stabilized (rifled) round: enables gyroscopic drift + Magnus. */
@@ -149,6 +170,7 @@ export class Munition {
     m.dragCurve = this.dragCurve.map((p) => ({ ...p }));
     m.motor = this.motor.clone();
     m.guidance = this.guidance.clone();
+    m.baseBleed = { ...this.baseBleed };
     return m;
   }
 }

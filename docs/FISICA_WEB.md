@@ -122,6 +122,33 @@ Nota de catálogo: el motor del misil del C++ original tenía velocidad de escap
 efectiva de 7000 m/s (nunca se validó); el catálogo BC usa Isp ≈ 265 s
 (`ΔV ≈ 2.1 km/s`) y queda calibrado a **300 km** de alcance máximo esférico.
 
+## Base bleed y cohete auxiliar RAP (P-PRO.4)
+
+Dos mecanismos reales de alcance extendido, seleccionables como munición en los
+obuses L39 (M777 y M109A7):
+
+- **Base bleed (M795E-BB)** — un generador de gas rellena la depresión del
+  culote mientras quema. Se modela como un único factor sobre el arrastre:
+  `Cd_efectivo = dragFactor·Cd` mientras `t < durationS` (25 s). El
+  `dragFactor = 0.5` es un **fit agregado**, no el reparto físico exacto: el
+  base drag es ~25-35% del Cd total en supersónico, y el resto del factor
+  absorbe la mejora de forma del casco BB frente al mismo casco sin BB. Con él,
+  el MISMO proyectil gana ~24% de alcance al activar el BB (banda publicada:
+  M795 22.5 km → M795E-BB 28.5 km ≈ +27%). Límites: el factor no depende de
+  Mach ni de la altitud (el quemado real se degrada con el spin y la presión),
+  y el corte a los 25 s es seco en vez de progresivo.
+- **RAP (M549A1)** — cohete auxiliar como el motor existente pero con
+  `motor.ignitionDelayS`: el empuje va de `ignitionDelay` a
+  `ignitionDelay + burnTime` (7 s + 3 s con ~12 kN·s), encendiendo en la fase
+  ascendente como el M549 real. El guiado que arranca "tras burnout" usa el fin
+  REAL del quemado (`ignitionDelay + burnTime`). Con `ignitionDelay = 0` la
+  integración es **bit a bit** la del motor clásico (paridad C++ intacta).
+
+BCs calibrados con `tools/calibrate_bc.ts --only m795bb m549rap` (ambos desde
+el L39 del M109): M795E-BB → 4.67 (~28.5 km), M549A1 → 3.43 (~30 km). Tests en
+`fidelity.test.ts`: ganancia BB on/off en 20-35%, paridad exacta con delay 0 y
+efecto medible con delay 7 s, bandas ±20% de ambas variantes.
+
 ## Guiado terminal Pro-Nav (P1.5)
 
 Municiones con `guidance.enabled` y objetivo asignado aplican **navegación

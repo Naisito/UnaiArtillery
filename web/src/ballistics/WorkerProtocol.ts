@@ -164,6 +164,8 @@ export type SolverConfigSpec = Partial<
 interface BaseRequest {
   id: number;
   weaponId: WeaponId;
+  /** P-PRO.4 — índice en Weapon.rounds (municiones alternativas); 0/ausente = estándar. */
+  roundIndex?: number;
   muzzle: PlainVec3;
   atmo: AtmoSpec;
   cfg: SolverConfigSpec;
@@ -230,6 +232,9 @@ export function decimatePath(fr: FlightResult, every: number): FlightResult {
 export function executeRequest(req: WorkerRequest): unknown {
   const atmo = buildAtmosphere(req.atmo);
   const weapon = WeaponCatalog.get(req.weaponId);
+  // P-PRO.4 — munición alternativa seleccionada (base bleed / RAP).
+  const altRound = req.roundIndex !== undefined ? weapon.rounds?.[req.roundIndex] : undefined;
+  if (altRound) weapon.round = altRound;
   const cfg = SolverConfig.with({ ...req.cfg });
   if (req.terrain) cfg.terrainHeight = buildTerrain(req.terrain);
   const fc = new WeaponSystem(atmo, cfg);

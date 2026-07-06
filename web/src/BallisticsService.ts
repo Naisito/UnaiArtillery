@@ -53,6 +53,8 @@ export class BallisticsService {
   muzzleHeightM = 3.0;
   /** Paso de integración para tiro/preview (el validado en tests). */
   dt = 0.005;
+  /** P-PRO.4 — munición seleccionada (índice en Weapon.rounds; 0 = estándar). */
+  roundIndex = 0;
 
   private windSpec: WindSpec = { kind: 'none' };
   private readonly ringCache = new Map<string, RangeRing>();
@@ -97,7 +99,13 @@ export class BallisticsService {
     this.ringInFlight.clear();
   }
 
-  weapon(id: WeaponId): Weapon { return WeaponCatalog.get(id); }
+  /** Arma con la munición seleccionada ya aplicada (P-PRO.4). */
+  weapon(id: WeaponId): Weapon {
+    const w = WeaponCatalog.get(id);
+    const alt = w.rounds?.[this.roundIndex];
+    if (alt) w.round = alt;
+    return w;
+  }
 
   // -- Meteorología (en vivo; el preview se recalcula al cambiar) -----------
   setSteadyWind(speedMS: number, fromBearingDeg: number): void {
@@ -224,7 +232,7 @@ export class BallisticsService {
   // -- Tiro y dirección de fuego ---------------------------------------------
   /** Alcance máximo aproximado de un arma+carga (para corredor y anillos). */
   approxMaxRange(id: WeaponId, chargeIndex: number): Promise<RangeRing> {
-    const key = `${id}:${chargeIndex}`;
+    const key = `${id}:${this.roundIndex}:${chargeIndex}`;
     const cached = this.ringCache.get(key);
     if (cached) return Promise.resolve(cached);
     const inFlight = this.ringInFlight.get(key);
@@ -233,6 +241,7 @@ export class BallisticsService {
     const p = this.call<RangeRing>({
       op: 'approxMaxRange',
       weaponId: id,
+      roundIndex: this.roundIndex,
       chargeIndex,
       muzzle: this.muzzleEnu,
       atmo: this.atmoSpec(),
@@ -276,6 +285,7 @@ export class BallisticsService {
       {
         op: 'solveTrajectory',
         weaponId: id,
+        roundIndex: this.roundIndex,
         order,
         targetEnu: targetEnu ?? null,
         muzzle: this.muzzleEnu,
@@ -308,6 +318,7 @@ export class BallisticsService {
     const sr = await this.call<SolveResult>({
       op: 'solveForTarget',
       weaponId: id,
+      roundIndex: this.roundIndex,
       targetRangeM: rangeM,
       azimuthDeg,
       chargeIndex,
@@ -345,6 +356,7 @@ export class BallisticsService {
     const raw = await this.call<DispersionResult>({
       op: 'fireDispersed',
       weaponId: id,
+      roundIndex: this.roundIndex,
       order,
       nRounds,
       errors,
@@ -368,6 +380,7 @@ export class BallisticsService {
     return this.call<MrsiRound[]>({
       op: 'solveMRSI',
       weaponId: id,
+      roundIndex: this.roundIndex,
       targetRangeM: rangeM,
       azimuthDeg,
       nRounds,
@@ -392,6 +405,7 @@ export class BallisticsService {
     const raw = await this.call<CompareEntry[]>({
       op: 'compareTrajectories',
       weaponId: id,
+      roundIndex: this.roundIndex,
       order,
       muzzle: this.muzzleEnu,
       atmo: this.atmoSpec(),

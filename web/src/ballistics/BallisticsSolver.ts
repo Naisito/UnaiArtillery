@@ -153,9 +153,11 @@ export class BallisticsSolver {
         ? (2.0 * Math.PI * v0) / (round.twistCalibers * round.diameter)
         : 0.0;
 
-    // P1.5 — guidance engages after burnout (+ optional delay).
+    // P1.5 — guidance engages after burnout (+ optional delay). Con RAP el
+    // fin REAL del quemado es ignitionDelayS + burnTime (P-PRO.4).
     const guidanceStart =
-      (round.motor.enabled ? round.motor.burnTime : 0.0) + round.guidance.activationDelay;
+      (round.motor.enabled ? round.motor.ignitionDelayS + round.motor.burnTime : 0.0) +
+      round.guidance.activationDelay;
 
     const ctx: IntegrationContext = { round, ops, spin0, guidanceStart, target, rhsEvals: 0 };
 
@@ -327,7 +329,13 @@ export class BallisticsSolver {
     let aDrag = new Vec3(0, 0, 0);
     if (cfg.enableDrag && vRelMag > 1e-6 && air.density > 0.0) {
       const mach = vRelMag / air.soundSpeed;
-      const Cd = round.dragCoefficient(mach);
+      let Cd = round.dragCoefficient(mach);
+      // P-PRO.4 — base bleed: mientras el generador de gas quema, el culote
+      // deja de succionar y el Cd efectivo baja (off por defecto: bit a bit
+      // idéntico al modelo validado).
+      if (round.baseBleed.enabled && t < round.baseBleed.durationS) {
+        Cd *= round.baseBleed.dragFactor;
+      }
       const fMag = 0.5 * air.density * Cd * A * vRelMag; // scalar
       aDrag = vRel.mul(-fMag * vRelMag).div(vRelMag * s.mass);
       // = -(1/2 rho Cd A |vRel|) * vRel / m   (force / mass)
@@ -340,9 +348,12 @@ export class BallisticsSolver {
     const aRot = ops.rotationAccel(s.pos, s.vel);
 
     // --- Rocket thrust (optional, along velocity) ---------------------------
+    // P-PRO.4 — RAP: el empuje va de ignitionDelayS a ignitionDelayS+burnTime
+    // (con delay 0, tBurn == t y la ventana es la de siempre).
     let aThrust = new Vec3(0, 0, 0);
     let dmdt = 0.0;
-    if (round.motor.enabled && t < round.motor.burnTime && s.mass > 0.0) {
+    const tBurn = t - round.motor.ignitionDelayS;
+    if (round.motor.enabled && tBurn >= 0.0 && tBurn < round.motor.burnTime && s.mass > 0.0) {
       const dir = vRelMag > 1e-6 ? s.vel.normalized() : ops.up(s.pos);
       aThrust = dir.mul(round.motor.thrust / s.mass);
       dmdt = -round.motor.propellantMass / round.motor.burnTime;
@@ -431,7 +442,10 @@ export class BallisticsSolver {
     const vRel = s.vel.sub(wind);
     const vRelMag = vRel.length();
     const mach = vRelMag / air.soundSpeed;
-    const Cd = ctx.round.dragCoefficient(mach);
+    let Cd = ctx.round.dragCoefficient(mach);
+    if (ctx.round.baseBleed.enabled && t < ctx.round.baseBleed.durationS) {
+      Cd *= ctx.round.baseBleed.dragFactor; // el HUD ve el mismo Cd que la física
+    }
     const A = ctx.round.referenceArea();
     const drag = this.cfg.enableDrag ? 0.5 * air.density * Cd * A * vRelMag * vRelMag : 0.0;
     out.path.push({
