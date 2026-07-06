@@ -57,6 +57,14 @@ export interface DispersionResult {
   flights?: FlightResult[];
 }
 
+// ---- P-PRO.6 ------------------------------------------------------------------
+/** Elipse de error 1σ predicha (a priori), en ejes alcance/deriva. */
+export interface DispersionPrediction {
+  sigmaRangeM: number;  // σ a lo largo del rumbo
+  sigmaCrossM: number;  // σ transversal
+  rangeM: number;       // alcance del tiro nominal (centro de la elipse)
+}
+
 // ---- P2.2 -------------------------------------------------------------------
 export interface MrsiRound {
   chargeIndex: number;
@@ -243,6 +251,77 @@ export class WeaponSystem {
     const out: DispersionResult = { impacts, meanImpact: mean, cep };
     if (collectFlights) out.flights = flights;
     return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  P-PRO.6 — Elipse de error PREDICHA (linealización por diferencias finitas).
+  // ---------------------------------------------------------------------------
+  /**
+   * Predice las σ 1-sigma de alcance y deriva SIN Monte-Carlo: mide las
+   * sensibilidades reales re-integrando — ∂R/∂V0 y ∂R/∂QE con diferencias
+   * centradas, y las de viento con dos integraciones con viento unitario
+   * longitudinal/transversal (nada de constantes mágicas) — y las compone:
+   *
+   *   σ_alcance = √((∂R/∂V0·σ_V0)² + (∂R/∂QE·σ_QE)² + (S_wl·σ_w)²)
+   *   σ_deriva  = √((R·σ_az)² + (S_wt·σ_w)²)
+   *
+   * Total: 7 integraciones (1 nominal + 4 de ∂R + 2 de viento). Con las
+   * mismas σ que fireDispersed, la elipse predicha y la nube muestral deben
+   * solaparse (test de fidelidad: ±30% con n = 200).
+   */
+  predictDispersion(
+    w: Weapon,
+    muzzlePos: Vec3,
+    order: FireOrder,
+    errors: DispersionErrors,
+  ): DispersionPrediction {
+    const v0 = WeaponSystem.muzzleVelocity(w, order);
+    const el = WeaponSystem.clampElevation(w, order.elevationDeg);
+    const az = (order.azimuthDeg * Math.PI) / 180.0;
+    const alongDir = new Vec3(Math.sin(az), Math.cos(az), 0);
+    const crossDir = new Vec3(Math.cos(az), -Math.sin(az), 0); // derecha del rumbo
+
+    const fly = (v0x: number, elx: number, extraWind?: Vec3): FlightResult => {
+      let solver = this.solver;
+      if (extraWind) {
+        const atmo = this.atmo.clone();
+        const base = this.atmo.windField;
+        atmo.windField = (pos, t) => base(pos, t).add(extraWind);
+        solver = new BallisticsSolver(atmo, this.cfg);
+      }
+      const v = WeaponSystem.launchVelocity(order.azimuthDeg, elx, v0x);
+      return solver.integrate(w.round, muzzlePos, v);
+    };
+    const alongOf = (fr: FlightResult) =>
+      fr.impactPoint.x * alongDir.x + fr.impactPoint.y * alongDir.y;
+    const crossOf = (fr: FlightResult) =>
+      fr.impactPoint.x * crossDir.x + fr.impactPoint.y * crossDir.y;
+
+    const nominal = fly(v0, el);
+    const R = nominal.downrange;
+
+    // ∂R/∂V0 y ∂R/∂QE por diferencias CENTRADAS (el tiro no es lineal cerca
+    // del alcance máximo: el esquema centrado cancela el término cuadrático).
+    const dV = Math.max(0.5, v0 * 0.005);
+    const dRdV = (alongOf(fly(v0 + dV, el)) - alongOf(fly(v0 - dV, el))) / (2 * dV);
+    const dEl = 0.25; // grados
+    const dRdEl = (alongOf(fly(v0, el + dEl)) - alongOf(fly(v0, el - dEl))) / (2 * dEl);
+
+    // Sensibilidades de viento con 2 m/s de señal (lineal en este rango).
+    const wMag = 2.0;
+    const sWl = (alongOf(fly(v0, el, alongDir.mul(wMag))) - alongOf(nominal)) / wMag;
+    const sWt = (crossOf(fly(v0, el, crossDir.mul(wMag))) - crossOf(nominal)) / wMag;
+
+    const sV0 = errors.muzzleVelocityStd ?? 0;
+    const sQEdeg = (errors.elevationStdMils ?? 0) * MILS_TO_DEG;
+    const sAzRad = ((errors.azimuthStdMils ?? 0) * MILS_TO_DEG * Math.PI) / 180.0;
+    const sW = errors.windStd ?? 0;
+
+    return {
+      sigmaRangeM: Math.hypot(dRdV * sV0, dRdEl * sQEdeg, sWl * sW),
+      sigmaCrossM: Math.hypot(R * sAzRad, sWt * sW),
+      rangeM: R,
+    };
   }
 
   // ---------------------------------------------------------------------------

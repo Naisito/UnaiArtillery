@@ -283,6 +283,45 @@ describe('P-PRO.4 — base bleed y cohete auxiliar (RAP)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('P-PRO.6 — elipse de error predicha vs Monte-Carlo', () => {
+  it('la predicción linealizada cae dentro de ±30% de las σ muestrales (M777 a 15 km, n=200)', () => {
+    const atmo = new Atmosphere();
+    const cfg = SolverConfig.with({ dt: 0.01, enableCoriolis: true, latitudeDeg: 40.0 });
+    const fc = new WeaponSystem(atmo, cfg);
+    const w = WeaponCatalog.m777();
+    const muzzle = new Vec3(0, 0, 3);
+
+    const sol = fc.solveForRange(w, muzzle, 15000.0, 90.0, 3, false);
+    expect(sol.found).toBe(true);
+    const order = { azimuthDeg: 90.0, elevationDeg: sol.elevationDeg, chargeIndex: 3 };
+    const v0 = WeaponSystem.muzzleVelocity(w, order);
+    const errors = {
+      muzzleVelocityStd: 0.003 * v0, azimuthStdMils: 1.0, elevationStdMils: 1.0, windStd: 0.6,
+    };
+
+    const pred = fc.predictDispersion(w, muzzle, order, errors);
+    expect(pred.rangeM).toBeGreaterThan(14000);
+
+    // n grande para que el error muestral (~σ/√(2n) ≈ 5%) no domine el ±30%.
+    const mc = fc.fireDispersed(w, muzzle, order, 200, errors, 1234);
+    // Rumbo 90º: alcance = x, deriva = -y (t positivo a la derecha del rumbo).
+    const xs = mc.impacts.map((p) => p.x);
+    const ys = mc.impacts.map((p) => p.y);
+    const std = (a: number[]) => {
+      const m = a.reduce((s, v) => s + v, 0) / a.length;
+      return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / (a.length - 1));
+    };
+    const sampleRange = std(xs);
+    const sampleCross = std(ys);
+
+    expect(pred.sigmaRangeM / sampleRange).toBeGreaterThan(0.7);
+    expect(pred.sigmaRangeM / sampleRange).toBeLessThan(1.3);
+    expect(pred.sigmaCrossM / sampleCross).toBeGreaterThan(0.7);
+    expect(pred.sigmaCrossM / sampleCross).toBeLessThan(1.3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('P1.2 — spin drift + Magnus', () => {
   // Fire due East at QE 45, no wind, Coriolis OFF to isolate the spin terms.
   function spinShot(rightHand: boolean, spinOn = true) {

@@ -17,6 +17,7 @@ export class TrajectoryPreview {
   private rings: Cesium.Entity[] = [];
   private compare: Cesium.Entity[] = [];
   private targetMark?: Cesium.Entity;
+  private errorEllipse: Cesium.Entity[] = [];
 
   constructor(
     private readonly viewer: Cesium.Viewer,
@@ -138,6 +139,60 @@ export class TrajectoryPreview {
     });
   }
 
+  /**
+   * P-PRO.6 — elipse de error PREDICHA (1σ y 2σ más tenue) centrada en el
+   * impacto previsto y orientada al rumbo. Semiejes = σ_alcance / σ_deriva.
+   * Con null se borra.
+   */
+  showErrorEllipse(
+    spec: {
+      centerEnu: Vec3;
+      bearingDeg: number;
+      sigmaRangeM: number;
+      sigmaCrossM: number;
+    } | null,
+  ): void {
+    for (const e of this.errorEllipse) this.viewer.entities.remove(e);
+    this.errorEllipse = [];
+    if (!spec) return;
+    const { centerEnu, bearingDeg, sigmaRangeM, sigmaCrossM } = spec;
+    if (!(sigmaRangeM > 0.5) || !(sigmaCrossM > 0.5)) return;
+
+    const frame = this.frameOf();
+    const position = frame.enuToEcef(centerEnu);
+    const height = frame.heightM + centerEnu.z + 1.5;
+    // Cesium mide la rotación de la elipse antihoraria desde el norte y exige
+    // semiMajor >= semiMinor: si domina la deriva, gira el eje mayor 90º.
+    const rangeIsMajor = sigmaRangeM >= sigmaCrossM;
+    const major = rangeIsMajor ? sigmaRangeM : sigmaCrossM;
+    const minor = rangeIsMajor ? sigmaCrossM : sigmaRangeM;
+    const rotation = Cesium.Math.toRadians(-(bearingDeg + (rangeIsMajor ? 0 : 90)));
+
+    const make = (k: number, alpha: number, withLabel: boolean) =>
+      this.viewer.entities.add({
+        position,
+        ellipse: {
+          semiMajorAxis: major * k,
+          semiMinorAxis: minor * k,
+          rotation,
+          stRotation: rotation,
+          height,
+          fill: true,
+          material: Cesium.Color.fromCssColorString('#ff5d5d').withAlpha(alpha * 0.16),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString('#ff5d5d').withAlpha(alpha),
+          outlineWidth: 2,
+        },
+        label: withLabel
+          ? {
+              ...this.label(`PER ±${sigmaRangeM.toFixed(0)} m / ±${sigmaCrossM.toFixed(0)} m`),
+              pixelOffset: new Cesium.Cartesian2(0, 18),
+            }
+          : undefined,
+      });
+    this.errorEllipse.push(make(1, 0.85, true), make(2, 0.35, false));
+  }
+
   /** P4.2 — arcos superpuestos del modo comparación, con etiquetas. */
   showCompare(list: { label: string; cssColor: string; result: FlightResult }[]): void {
     this.clearCompare();
@@ -183,5 +238,6 @@ export class TrajectoryPreview {
     this.clearRings();
     this.clearCompare();
     this.showTarget(null);
+    this.showErrorEllipse(null);
   }
 }

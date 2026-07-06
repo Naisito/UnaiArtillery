@@ -8,7 +8,7 @@
 //  proyectil (con retardos para la salva MRSI).
 // ============================================================================
 import { FireOrder, Vec3, WeaponSystem } from './ballistics';
-import type { FlightResult } from './ballistics';
+import type { DispersionErrors, FlightResult } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { CameraDirector } from './CameraDirector';
 import { GunModel } from './GunModel';
@@ -72,6 +72,10 @@ export class ArtilleryPiece {
       this.preview.showFlight(result);
       this.preview.showRings(ring.minRangeM, ring.maxRangeM);
       this.onPreview?.(result);
+      // P-PRO.6 — con objetivo marcado, elipse 1σ/2σ predicha sobre el
+      // impacto previsto (mismas σ que la salva dispersa: deben solaparse).
+      if (this.targetEnu) void this.refreshErrorEllipse(result, token);
+      else this.preview.showErrorEllipse(null);
       this.panel.setSolution(
         `QE ${this.panel.elevationDeg.toFixed(1)}º → ${(result.downrange / 1000).toFixed(2)} km · ` +
           `TOF ${result.timeOfFlight.toFixed(1)} s · ápice ${(result.apex / 1000).toFixed(1)} km`,
@@ -79,6 +83,38 @@ export class ArtilleryPiece {
     } catch (err) {
       if ((err as Error)?.name === 'SupersededError') return; // preview obsoleto
       console.error('[preview]', err);
+    }
+  }
+
+  /** σ realistas de la batería — las MISMAS para la salva dispersa (a
+   *  posteriori) y la elipse predicha (a priori): así se superponen. */
+  private dispersionErrors(): DispersionErrors {
+    const weapon = this.service.weapon(this.panel.weaponId);
+    const v0 = WeaponSystem.muzzleVelocity(weapon, this.order());
+    return {
+      muzzleVelocityStd: 0.003 * v0, // ~0.3% lote a lote
+      azimuthStdMils: 1.0,
+      elevationStdMils: 1.0,
+      windStd: 0.6,
+    };
+  }
+
+  /** P-PRO.6 — recalcula y pinta la elipse de error predicha. */
+  private async refreshErrorEllipse(previewFlight: FlightResult, token: number): Promise<void> {
+    try {
+      const pred = await this.service.predictDispersion(
+        this.panel.weaponId, this.order(), this.dispersionErrors(),
+      );
+      if (token !== this.previewToken) return;
+      this.preview.showErrorEllipse({
+        centerEnu: previewFlight.impactPoint,
+        bearingDeg: this.panel.azimuthDeg,
+        sigmaRangeM: pred.sigmaRangeM,
+        sigmaCrossM: pred.sigmaCrossM,
+      });
+    } catch (err) {
+      if ((err as Error)?.name === 'SupersededError') return;
+      console.error('[predict-dispersion]', err);
     }
   }
 
@@ -187,14 +223,7 @@ export class ArtilleryPiece {
     this.panel.setFiring(true);
     this.panel.setStatus(`Calculando salva dispersa ×${nRounds}…`);
     try {
-      const weapon = this.service.weapon(this.panel.weaponId);
-      const v0 = WeaponSystem.muzzleVelocity(weapon, this.order());
-      const errors = {
-        muzzleVelocityStd: 0.003 * v0, // ~0.3% lote a lote
-        azimuthStdMils: 1.0,
-        elevationStdMils: 1.0,
-        windStd: 0.6,
-      };
+      const errors = this.dispersionErrors(); // P-PRO.6: las σ de la elipse
       const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
       const res = await this.service.fireDispersed(
         this.panel.weaponId, this.order(), nRounds, errors, seed,
@@ -293,5 +322,6 @@ export class ArtilleryPiece {
   clearTarget(): void {
     this.targetEnu = null;
     this.preview.showTarget(null);
+    this.preview.showErrorEllipse(null); // P-PRO.6
   }
 }

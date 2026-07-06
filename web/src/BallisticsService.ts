@@ -18,8 +18,8 @@ import * as Cesium from 'cesium';
 import { GeoFrame } from './frame';
 import { Atmosphere, Vec3, Weapon, WeaponCatalog, WeaponId, WindProfilePoint } from './ballistics';
 import type {
-  DispersionErrors, DispersionResult, FireOrder, FiringTable, FlightResult, MrsiRound,
-  SolveResult, SolverConfig,
+  DispersionErrors, DispersionPrediction, DispersionResult, FireOrder, FiringTable,
+  FlightResult, MrsiRound, SolveResult, SolverConfig,
 } from './ballistics';
 import {
   AtmoSpec, CancelMessage, CompareEntry, RangeRing, SolverConfigSpec, TerrainSpec,
@@ -369,6 +369,35 @@ export class BallisticsService {
       terrain,
     });
     return hydrateDispersion(raw);
+  }
+
+  /**
+   * P-PRO.6 — elipse de error 1σ PREDICHA (a priori): sensibilidades por
+   * diferencias finitas en el worker (7 integraciones, carril cancelable).
+   */
+  async predictDispersion(
+    id: WeaponId,
+    order: FireOrder,
+    errors: DispersionErrors,
+  ): Promise<DispersionPrediction> {
+    const ring = await this.approxMaxRange(id, order.chargeIndex);
+    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, 2000);
+    return this.call<DispersionPrediction>(
+      {
+        op: 'predictDispersion',
+        weaponId: id,
+        roundIndex: this.roundIndex,
+        order,
+        errors,
+        muzzle: this.muzzleEnu,
+        atmo: this.atmoSpec(),
+        cfg: this.makeConfigSpec({
+          dt: 0.01, sphericalEarth: ring.maxRangeM > 50_000, maxFlight: 700,
+        }),
+        terrain,
+      },
+      'predict-dispersion',
+    );
   }
 
   /** P2.2 — resuelve una salva MRSI hacia un alcance dado. */

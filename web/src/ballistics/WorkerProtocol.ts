@@ -23,7 +23,8 @@ import { FiringTable, generateFiringTable } from './FiringTables';
 import { Vec3 } from './Vec3';
 import { WeaponCatalog, WeaponId } from './WeaponCatalog';
 import {
-  DispersionErrors, DispersionResult, FireOrder, MrsiRound, SolveResult, WeaponSystem,
+  DispersionErrors, DispersionPrediction, DispersionResult, FireOrder, MrsiRound, SolveResult,
+  WeaponSystem,
 } from './WeaponSystem';
 
 export interface PlainVec3 { x: number; y: number; z: number }
@@ -192,7 +193,8 @@ export type WorkerRequest =
       errors: DispersionErrors;
       seed: number;
     })
-  | (BaseRequest & { op: 'generateFiringTable'; chargeIndex: number; stepM: number });
+  | (BaseRequest & { op: 'generateFiringTable'; chargeIndex: number; stepM: number })
+  | (BaseRequest & { op: 'predictDispersion'; order: FireOrder; errors: DispersionErrors });
 
 /** Petición sin id (el servicio lo asigna). Omit distributivo sobre la unión. */
 export type WorkerRequestBody = WorkerRequest extends infer R
@@ -296,6 +298,15 @@ export function executeRequest(req: WorkerRequest): unknown {
         decimatePath(fr, fr.timeOfFlight > DECIMATE_ABOVE_TOF_S ? DECIMATE_EVERY : 1),
       );
       return res;
+    }
+
+    case 'predictDispersion': {
+      // P-PRO.6 — elipse 1σ a priori (7 integraciones, misma serialización
+      // que fireDispersed: order + errors).
+      const pred: DispersionPrediction = fc.predictDispersion(
+        weapon, muzzle, req.order, req.errors,
+      );
+      return pred;
     }
 
     case 'generateFiringTable': {

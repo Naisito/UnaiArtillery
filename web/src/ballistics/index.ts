@@ -12,7 +12,7 @@ export { Weapon, WeaponCatalog } from './WeaponCatalog';
 export type { WeaponId, CatalogVariant, ChargeZone } from './WeaponCatalog';
 export { WeaponSystem, defaultFireOrder } from './WeaponSystem';
 export type {
-  FireOrder, SolveResult, DispersionErrors, DispersionResult, MrsiRound,
+  FireOrder, SolveResult, DispersionErrors, DispersionResult, DispersionPrediction, MrsiRound,
 } from './WeaponSystem';
 export { DeterministicRng } from './random';
 export { generateFiringTable, firingTableCSV } from './FiringTables';

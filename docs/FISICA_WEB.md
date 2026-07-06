@@ -168,6 +168,28 @@ RNG **determinista** (mulberry32 + Marsaglia polar; nunca `Math.random`). Devuel
 los n impactos, su centro y el **CEP** (mediana del fallo radial respecto al centro).
 Tests: CEP monótono con σ_V₀ y reproducibilidad exacta por semilla.
 
+## Elipse de error predicha (P-PRO.6)
+
+La artillería real publica errores probables *a priori*; el simulador los
+predice **linealizando sensibilidades medidas**, no con constantes:
+
+- `WeaponSystem.predictDispersion` re-integra con ±δV₀ y ±δQE (diferencias
+  centradas: cancelan el término cuadrático cerca del alcance máximo) y dos
+  veces más con viento unitario longitudinal/transversal — 7 integraciones en
+  total, cabe en el worker a dt 0.01.
+- Composición en cuadratura:
+  `σ_alcance = √((∂R/∂V₀·σ_V₀)² + (∂R/∂QE·σ_QE)² + (S_wₗ·σ_w)²)` y
+  `σ_deriva = √((R·σ_az)² + (S_wₜ·σ_w)²)`.
+- En la app, al marcar objetivo se pinta la elipse 1σ (y 2σ más tenue)
+  centrada en el impacto previsto y orientada al rumbo, con leyenda
+  "PER ±X m / ±Y m". Usa las MISMAS σ que la salva dispersa (0.3% V₀, 1 mil,
+  viento 0.6 m/s), así los cráteres de la salva caen mayoritariamente dentro
+  de la 2σ pintada.
+- Validación honesta: test que compara la predicción contra las desviaciones
+  muestrales de `fireDispersed` con n = 200 y semilla fija — coincide a ±30%
+  en ambos ejes. Límite: la linealización ignora términos cruzados y la
+  asimetría corto/largo del alcance (visible con σ mucho mayores).
+
 ## MRSI (P2.2)
 
 `solveMRSI` recorre cargas (de mayor a menor v₀) y ramas alta/baja, valida que cada
