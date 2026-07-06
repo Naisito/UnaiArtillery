@@ -8,8 +8,9 @@
 //    * el arma se reconstruye en el worker por id de catálogo;
 //    * la atmósfera viaja como knobs + WindSpec serializable (constante con
 //      ganancia Ekman, o perfil por altitud);
-//    * el terreno viaja como el perfil del corredor YA muestreado en el hilo
-//      principal (alturas + paso + rumbo) — muestrear necesita Cesium.
+//    * el terreno viaja como la banda del corredor YA muestreada en el hilo
+//      principal (malla de alturas + pasos + rumbo) — muestrear necesita
+//      Cesium.
 //
 //  `executeRequest` es el despachador real: lo usa el worker
 //  (src/ballistics.worker.ts), el fallback síncrono del servicio cuando no
@@ -73,26 +74,76 @@ export function buildAtmosphere(spec: AtmoSpec): Atmosphere {
 }
 
 // ---------------------------------------------------------------------------
-//  Terreno como perfil 1D a lo largo del corredor de tiro.
+//  Terreno como banda 2D curvilínea del corredor de tiro (P-PRO.3).
+//
+//  Malla con eje `s` a lo largo del rumbo y eje `t` perpendicular (positivo a
+//  la derecha del rumbo), t ∈ [-halfWidthM, +halfWidthM] en `rows` filas.
+//  `profile` es row-major: profile[j*cols + i] con j la fila transversal
+//  (j = 0 → t = -halfWidthM) e i la columna a lo largo (s = i·stepAlongM).
+//  rows = 1 degenera EXACTAMENTE al perfil 1D de P-NEXT.5.
 // ---------------------------------------------------------------------------
 export interface TerrainSpec {
-  dirE: number;       // rumbo del corredor (unitario)
+  dirE: number;         // rumbo del corredor (unitario)
   dirN: number;
-  stepM: number;      // paso de muestreo del perfil
-  profile: number[];  // alturas z ENU a lo largo del rayo
+  /** Paso a lo largo del rumbo. */
+  stepAlongM?: number;
+  /** Alias legado de stepAlongM (specs 1D de P-NEXT.5). */
+  stepM?: number;
+  /** Paso transversal entre filas (solo rows > 1). */
+  stepCrossM?: number;
+  /** Semiancho de la banda: t de la fila 0 es -halfWidthM (solo rows > 1). */
+  halfWidthM?: number;
+  /** Filas transversales; 1 (o ausente) = perfil 1D clásico. */
+  rows?: number;
+  profile: number[];    // alturas z ENU, row-major rows × cols
 }
 
-/** Callback (este, norte) -> z ENU que interpola el perfil por distancia proyectada. */
+/**
+ * Callback (este, norte) -> z ENU. Con rows = 1 interpola el perfil por
+ * distancia proyectada (idéntico bit a bit al 1D de P-NEXT.5); con rows > 1
+ * interpola BILINEAL sobre la malla curvilínea, con clamp en los 4 bordes.
+ */
 export function buildTerrain(spec: TerrainSpec): (east: number, north: number) => number {
-  const { dirE, dirN, stepM, profile } = spec;
+  const { dirE, dirN, profile } = spec;
+  const stepAlong = spec.stepAlongM ?? spec.stepM;
+  if (stepAlong === undefined) throw new Error('TerrainSpec sin stepAlongM/stepM');
+  const rows = spec.rows ?? 1;
+
+  if (rows <= 1) {
+    return (east: number, north: number) => {
+      const s = east * dirE + north * dirN; // distancia proyectada sobre el rayo
+      if (s <= 0) return profile[0];
+      const k = s / stepAlong;
+      const i = Math.floor(k);
+      if (i >= profile.length - 1) return profile[profile.length - 1];
+      const f = k - i;
+      return profile[i] + f * (profile[i + 1] - profile[i]);
+    };
+  }
+
+  const stepCross = spec.stepCrossM ?? stepAlong;
+  const halfWidth = spec.halfWidthM ?? ((rows - 1) / 2) * stepCross;
+  const cols = Math.floor(profile.length / rows);
   return (east: number, north: number) => {
-    const s = east * dirE + north * dirN; // distancia proyectada sobre el rayo
-    if (s <= 0) return profile[0];
-    const k = s / stepM;
-    const i = Math.floor(k);
-    if (i >= profile.length - 1) return profile[profile.length - 1];
-    const f = k - i;
-    return profile[i] + f * (profile[i + 1] - profile[i]);
+    const s = east * dirE + north * dirN;
+    const t = east * dirN - north * dirE; // positivo a la derecha del rumbo
+    let u = s / stepAlong;
+    if (u < 0) u = 0; else if (u > cols - 1) u = cols - 1;
+    let v = (t + halfWidth) / stepCross;
+    if (v < 0) v = 0; else if (v > rows - 1) v = rows - 1;
+    const i0 = Math.floor(u);
+    const j0 = Math.floor(v);
+    const i1 = Math.min(i0 + 1, cols - 1);
+    const j1 = Math.min(j0 + 1, rows - 1);
+    const fi = u - i0;
+    const fj = v - j0;
+    const z00 = profile[j0 * cols + i0];
+    const z10 = profile[j0 * cols + i1];
+    const z01 = profile[j1 * cols + i0];
+    const z11 = profile[j1 * cols + i1];
+    const za = z00 + fi * (z10 - z00);
+    const zb = z01 + fi * (z11 - z01);
+    return za + fj * (zb - za);
   };
 }
 

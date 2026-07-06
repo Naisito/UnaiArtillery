@@ -173,3 +173,115 @@ describe('P-NEXT.5 — protocolo de serialización del worker', () => {
     expect(ring.minRangeM).toBe(minR);
   });
 });
+
+// ============================================================================
+//  P-PRO.3 — banda 2D del corredor: lo que se aparta del eje se resuelve
+//  contra las alturas de SU ladera, no las del eje.
+// ============================================================================
+describe('P-PRO.3 — banda 2D del corredor', () => {
+  /** Malla sintética z = slope·t (plano inclinado lateral), rumbo este. */
+  function lateralPlane(slope: number, rows: number, cols: number, stepCross: number): TerrainSpec {
+    const halfW = ((rows - 1) / 2) * stepCross;
+    const profile: number[] = [];
+    for (let j = 0; j < rows; j++) {
+      const t = -halfW + j * stepCross;
+      for (let i = 0; i < cols; i++) profile.push(slope * t);
+    }
+    return {
+      dirE: 1, dirN: 0,
+      stepAlongM: 400, stepCrossM: stepCross, halfWidthM: halfW, rows,
+      profile,
+    };
+  }
+
+  it('(a) bilineal exacta sobre el plano lateral z = 0.1·t', () => {
+    // Rumbo este: t = -north (positivo a la derecha del rumbo, o sea al sur).
+    const h = buildTerrain(structuredClone(lateralPlane(0.1, 5, 11, 500)));
+    expect(h(2000, -500)).toBeCloseTo(50, 9);   // t = +500 -> z = 50
+    expect(h(2000, 500)).toBeCloseTo(-50, 9);   // t = -500 -> z = -50
+    expect(h(2000, -250)).toBeCloseTo(25, 9);   // media celda: bilineal exacta
+    expect(h(3141, -777)).toBeCloseTo(77.7, 9); // punto arbitrario dentro
+    expect(h(2000, -5000)).toBeCloseTo(100, 9); // clamp lateral en el borde
+    expect(h(-999, -500)).toBeCloseTo(50, 9);   // clamp en s < 0
+    expect(h(99999, 500)).toBeCloseTo(-50, 9);  // clamp en s > largo
+  });
+
+  it('(b) el guiado hacia un objetivo desplazado 800 m impacta en SU ladera', () => {
+    // GMLRS guiado, rumbo este, sin viento ni Coriolis para aislar el efecto.
+    const cols = 200; // cubre ~80 km
+    const band = lateralPlane(0.1, 5, cols, 500);
+    const cfg = {
+      dt: 0.01, latitudeDeg: 40.75, anchorLonDeg: -3.9,
+      enableCoriolis: false, groundZ: 0, maxFlight: 700,
+    };
+    const base = {
+      weaponId: 'gmlrs' as const,
+      muzzle: { x: 0, y: 0, z: 3 },
+      atmo: { ...ATMO, wind: { kind: 'none' } as const },
+      cfg,
+    };
+    const order: FireOrder = { azimuthDeg: 90, elevationDeg: 35, chargeIndex: -1 };
+
+    // Tiro natural sin objetivo: fija el alcance al que colocar el objetivo.
+    const natural = executeRequest(structuredClone({
+      ...base, id: 10, op: 'solveTrajectory' as const, order, targetEnu: null, terrain: band,
+    })) as FlightResult;
+    expect(natural.impacted).toBe(true);
+
+    // Objetivo desplazado 800 m al NORTE del eje (t = -800 -> ladera a -80 m).
+    const target = { x: natural.impactPoint.x, y: 800, z: -80 };
+    const guided = executeRequest(structuredClone({
+      ...base, id: 11, op: 'solveTrajectory' as const, order, targetEnu: target, terrain: band,
+    })) as FlightResult;
+    expect(guided.impacted).toBe(true);
+    // Llega lateralmente a su objetivo...
+    expect(Math.abs(guided.impactPoint.y - 800)).toBeLessThan(150);
+    // ...y cae a la altura de SU ladera (no a la del eje, que es 0):
+    expect(guided.impactPoint.z).toBeLessThan(-40);
+    expect(guided.impactPoint.z).toBeCloseTo(0.1 * -guided.impactPoint.y, 0);
+
+    // Contraste: el perfil 1D del eje (todo ceros) lo clavaba a z = 0.
+    const flat1d: TerrainSpec = {
+      dirE: 1, dirN: 0, stepAlongM: 400, rows: 1,
+      profile: Array.from({ length: cols }, () => 0),
+    };
+    const guided1d = executeRequest(structuredClone({
+      ...base, id: 12, op: 'solveTrajectory' as const, order, targetEnu: target, terrain: flat1d,
+    })) as FlightResult;
+    expect(Math.abs(guided1d.impactPoint.z)).toBeLessThan(1);
+  });
+
+  it('(c) rows = 1 reproduce bit a bit el resultado del perfil 1D actual', () => {
+    // El mismo perfil de la loma, una vez como spec legado (stepM) y otra como
+    // banda degenerada (stepAlongM + rows: 1).
+    const spec1d: TerrainSpec = {
+      dirE: TERRAIN.dirE, dirN: TERRAIN.dirN,
+      stepAlongM: TERRAIN.stepM, rows: 1, profile: [...TERRAIN.profile],
+    };
+    const hLegacy = buildTerrain(structuredClone(TERRAIN));
+    const hNew = buildTerrain(structuredClone(spec1d));
+    for (const [e, n] of [[0, 0], [-100, 50], [1234, -321], [15000, 400], [99999, 0]]) {
+      expect(hNew(e, n)).toBe(hLegacy(e, n));
+    }
+
+    const run = (terrain: TerrainSpec): FlightResult =>
+      executeRequest(structuredClone({
+        id: 13, op: 'solveTrajectory' as const, weaponId: 'm777' as const,
+        order: ORDER, targetEnu: null, muzzle: { x: 0, y: 0, z: 3 },
+        atmo: ATMO,
+        cfg: {
+          dt: 0.01, latitudeDeg: 40.75, anchorLonDeg: -3.9,
+          enableCoriolis: true, groundZ: 0, maxFlight: 700,
+        },
+        terrain,
+      })) as FlightResult;
+    const a = run(TERRAIN);
+    const b = run(spec1d);
+    expect(b.downrange).toBe(a.downrange);
+    expect(b.timeOfFlight).toBe(a.timeOfFlight);
+    expect(b.impactPoint.x).toBe(a.impactPoint.x);
+    expect(b.impactPoint.y).toBe(a.impactPoint.y);
+    expect(b.impactPoint.z).toBe(a.impactPoint.z);
+    expect(b.apex).toBe(a.apex);
+  });
+});

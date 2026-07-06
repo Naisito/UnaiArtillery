@@ -178,27 +178,46 @@ export class BallisticsService {
 
   // -- Muestreo del corredor de tiro ----------------------------------------
   /**
-   * Muestrea la altura del terreno a lo largo del rumbo `azimuthDeg` hasta
-   * `maxRangeM` y devuelve el perfil serializable (alturas + paso + rumbo)
-   * que viaja al worker. La deriva lateral de un tiro es pequeña frente al
-   * paso de muestreo, así que un perfil 1D basta (y evita miles de raycasts).
+   * P-PRO.3 — muestrea la BANDA del corredor: malla curvilínea con eje `s` a
+   * lo largo del rumbo `azimuthDeg` hasta `maxRangeM` y eje `t` perpendicular
+   * (±halfWidthM en filas cada stepCrossM), en UNA llamada batched a Cesium.
+   * Lo que se aparta del eje — guiados desplazados, salvas, deriva — se
+   * resuelve contra las alturas de SU ladera, no las del eje. Con
+   * `halfWidthM = 0` degenera al perfil 1D de P-NEXT.5.
    */
-  async sampleCorridor(azimuthDeg: number, maxRangeM: number, stepM = 400): Promise<TerrainSpec> {
+  async sampleCorridor(
+    azimuthDeg: number,
+    maxRangeM: number,
+    stepM = 400,
+    halfWidthM = 1000,
+    stepCrossM = 500,
+  ): Promise<TerrainSpec> {
     const az = (azimuthDeg * Math.PI) / 180.0;
     const dir = { e: Math.sin(az), n: Math.cos(az) };
-    const count = Math.max(2, Math.ceil((maxRangeM * 1.15) / stepM) + 1);
+    const right = { e: dir.n, n: -dir.e }; // t positivo a la derecha del rumbo
+    const cols = Math.max(2, Math.ceil((maxRangeM * 1.15) / stepM) + 1);
+    const rows = halfWidthM > 0 ? 2 * Math.max(1, Math.round(halfWidthM / stepCrossM)) + 1 : 1;
+    const halfW = ((rows - 1) / 2) * stepCrossM; // semiancho real de la malla
     const cartos: Cesium.Cartographic[] = [];
-    for (let i = 0; i < count; i++) {
-      const s = i * stepM;
-      cartos.push(this.frame.cartographicOfEnu(new Vec3(dir.e * s, dir.n * s, 0)));
+    for (let j = 0; j < rows; j++) {
+      const t = -halfW + j * stepCrossM;
+      for (let i = 0; i < cols; i++) {
+        const s = i * stepM;
+        cartos.push(this.frame.cartographicOfEnu(
+          new Vec3(dir.e * s + right.e * t, dir.n * s + right.n * t, 0),
+        ));
+      }
     }
     const heights = await this.sampleHeights(cartos);
     const anchorH = this.frame.heightM;
     return {
       dirE: dir.e,
       dirN: dir.n,
-      stepM,
-      profile: heights.map((h) => h - anchorH), // alturas en z ENU
+      stepAlongM: stepM,
+      stepCrossM,
+      halfWidthM: halfW,
+      rows,
+      profile: heights.map((h) => h - anchorH), // alturas en z ENU, row-major
     };
   }
 
@@ -240,7 +259,16 @@ export class BallisticsService {
     lane?: string,
   ): Promise<FlightResult> {
     const ring = await this.approxMaxRange(id, order.chargeIndex);
-    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM);
+    // Objetivo guiado desplazado del eje: ensancha la banda hasta cubrirlo.
+    let halfWidthM = 1000;
+    if (targetEnu) {
+      const az = (order.azimuthDeg * Math.PI) / 180.0;
+      const dE = targetEnu.x - this.muzzleEnu.x;
+      const dN = targetEnu.y - this.muzzleEnu.y;
+      const lateral = Math.abs(dE * Math.cos(az) - dN * Math.sin(az));
+      halfWidthM = Math.max(2000, lateral * 1.25);
+    }
+    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, halfWidthM);
     // Misil de largo alcance: integra sobre Tierra esférica (P1.4, >50 km).
     const spherical = ring.maxRangeM > 50_000;
     const { terrainHeight: _t, gravity: _g, ...plainOverrides } = overrides;
@@ -311,7 +339,9 @@ export class BallisticsService {
     seed: number,
   ): Promise<DispersionResult> {
     const ring = await this.approxMaxRange(id, order.chargeIndex);
-    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM);
+    // Salva dispersa: banda ancha (±2 km) para que cada tiro desviado
+    // encuentre la altura de su ladera, no la del eje.
+    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, 2000);
     const raw = await this.call<DispersionResult>({
       op: 'fireDispersed',
       weaponId: id,
