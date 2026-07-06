@@ -72,14 +72,19 @@ export class GoogleTiles {
     private readonly onWarning: (msg: string) => void = (m) => console.warn(m),
   ) {}
 
+  /**
+   * Tileset visible ahora mismo (null si está apagado). El servicio balístico
+   * lo usa para anclar la batería al SUELO VISUAL de Google: su terreno viene
+   * horneado en las teselas y NO coincide con el terrainProvider (sin token de
+   * ion, el elipsoide está cientos de metros por debajo de la ciudad visible).
+   */
+  get groundTileset(): Cesium.Cesium3DTileset | null {
+    return this.tileset && this.tileset.show ? this.tileset : null;
+  }
+
   /** Hay alguna vía configurada (clave de Google o token de ion). */
   static available(): boolean {
     return GoogleTiles.googleKey().length > 0 || GoogleTiles.ionToken().length > 0;
-  }
-
-  /** La clave de Google está presente: encender de serie. */
-  static preferredOn(): boolean {
-    return GoogleTiles.googleKey().length > 0;
   }
 
   private static googleKey(): string {

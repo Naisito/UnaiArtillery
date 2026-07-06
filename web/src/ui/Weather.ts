@@ -26,9 +26,11 @@ export class WeatherPanel {
   private realActive = false;
   private realBtn!: HTMLButtonElement;
   private modeLabel!: HTMLElement;
+  private root!: HTMLElement;
 
   constructor(private readonly service: BallisticsService) {
     const el = document.getElementById('weatherPanel')!;
+    this.root = el;
     el.innerHTML = '';
     const h = document.createElement('h2');
     h.textContent = 'Meteorología';
@@ -92,6 +94,20 @@ export class WeatherPanel {
   /** P-PRO.2 — la batería se movió: re-consulta SOLO si el modo real sigue activo. */
   onBatteryMoved(): void {
     if (this.realActive) void this.loadRealWeather(true);
+  }
+
+  /**
+   * Barra de FOV bajo la meteorología. La cámara es de Cesium (no asunto de
+   * la meteo), así que main.ts inyecta los accesores; tocarla NO desactiva el
+   * modo de meteo real — es puramente visual.
+   */
+  addFovControl(getDeg: () => number, setDeg: (deg: number) => void): void {
+    const h = document.createElement('h3');
+    h.textContent = 'Vista';
+    this.root.appendChild(h);
+    this.root.appendChild(
+      this.slider('FOV', 20, 120, 1, Math.round(getDeg()), 'º', (v) => setDeg(v)),
+    );
   }
 
   private async loadRealWeather(silent: boolean): Promise<void> {

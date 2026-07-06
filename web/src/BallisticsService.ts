@@ -90,12 +90,55 @@ export class BallisticsService {
 
   get batteryLatDeg(): number { return this.frame.latDeg; }
 
+  // -- Suelo visual (Edificios 3D) --------------------------------------------
   /**
-   * Ancla la batería en (lon, lat): muestrea la altura real del terreno y
-   * reconstruye el marco ENU sobre el suelo. La latitud alimenta el Coriolis.
+   * P-NEXT.3 fix — con los Photorealistic 3D Tiles activos, el suelo VISUAL
+   * es el de Google (viene horneado en las teselas) y no coincide con el
+   * terrainProvider: sin token de ion (elipsoide) la diferencia son cientos
+   * de metros y todo lo ENU quedaba enterrado. Cuando main.ts fija este
+   * tileset, el anclaje de la batería y los decals muestrean contra él.
+   */
+  private tilesetGround: Cesium.Cesium3DTileset | null = null;
+
+  setTilesetGround(tileset: Cesium.Cesium3DTileset | null): void {
+    this.tilesetGround = tileset;
+  }
+
+  /** Altura elipsoidal del suelo visual en las teselas 3D, o null si no hay. */
+  private async tilesetHeight(carto: Cesium.Cartographic): Promise<number | null> {
+    const scene = this.viewer.scene;
+    if (!this.tilesetGround?.show || !scene.sampleHeightSupported) return null;
+    try {
+      const [s] = await scene.sampleHeightMostDetailed([carto.clone()]);
+      return s && Number.isFinite(s.height) ? s.height : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * z ENU del suelo VISUAL en un punto (teselas 3D si están activas; si no,
+   * el proveedor de terreno real). Devuelve null si no hay fuente mejor que
+   * la física (elipsoide sin teselas): el llamador conserva su z.
+   */
+  async visualGroundZ(enu: Vec3): Promise<number | null> {
+    const carto = this.frame.cartographicOfEnu(new Vec3(enu.x, enu.y, 0));
+    const fromTiles = await this.tilesetHeight(carto);
+    if (fromTiles !== null) return fromTiles - this.frame.heightM;
+    if (this.viewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) return null;
+    const [h] = await this.sampleHeights([carto]);
+    return h - this.frame.heightM;
+  }
+
+  /**
+   * Ancla la batería en (lon, lat): muestrea la altura real del terreno —
+   * contra las teselas 3D si están activas — y reconstruye el marco ENU
+   * sobre el suelo. La latitud alimenta el Coriolis.
    */
   async setBattery(lonDeg: number, latDeg: number): Promise<void> {
-    const h = await this.sampleHeight(Cesium.Cartographic.fromDegrees(lonDeg, latDeg));
+    const carto = Cesium.Cartographic.fromDegrees(lonDeg, latDeg);
+    let h = await this.tilesetHeight(carto);
+    if (h === null) h = await this.sampleHeight(carto);
     this.frame = new GeoFrame(lonDeg, latDeg, h);
     this.ringCache.clear();
     this.ringInFlight.clear();
@@ -486,9 +529,13 @@ export class BallisticsService {
   // -- Terreno ---------------------------------------------------------------
   private async sampleHeights(cartos: Cesium.Cartographic[]): Promise<number[]> {
     const provider = this.viewer.terrainProvider;
-    // Sin terreno real (elipsoide, p.ej. sin token de ion) todo es altura 0.
+    // Sin terreno real (elipsoide, p.ej. sin token de ion) todo es altura 0 —
+    // salvo con teselas 3D activas: entonces el mejor suelo disponible es un
+    // plano a la cota del ancla (la batería SÍ está muestreada contra las
+    // teselas); a 0 m el corredor quedaría cientos de metros bajo la ciudad.
     if (provider instanceof Cesium.EllipsoidTerrainProvider) {
-      return cartos.map(() => 0);
+      const h = this.tilesetGround?.show ? this.frame.heightM : 0;
+      return cartos.map(() => h);
     }
     try {
       const sampled = await Cesium.sampleTerrainMostDetailed(

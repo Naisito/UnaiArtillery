@@ -102,14 +102,35 @@ async function boot(): Promise<void> {
       pickMode = active ? 'battery' : 'none';
       if (active) toast('Clic en el globo para desplegar la batería ahí');
     },
-    onGoogleTiles: (active) => {
-      void googleTiles.setEnabled(active).then((on) => panel.setGoogleTiles(on));
-    },
+    onGoogleTiles: (active) => void applyGoogleTiles(active),
   });
 
-  // Con clave de Google presente, los edificios entran encendidos de serie.
-  if (GoogleTiles.preferredOn()) {
-    void googleTiles.setEnabled(true).then((on) => panel.setGoogleTiles(on));
+  // Los edificios 3D NUNCA entran solos: siempre a golpe de toggle (cuota).
+
+  // P-NEXT.3 fix — encender/apagar los edificios cambia el SUELO VISUAL (el
+  // terreno de Google viene horneado en las teselas y no coincide con el
+  // terrainProvider): hay que re-anclar la batería a la cota nueva o el
+  // cañón y todo lo ENU quedan enterrados/flotando y "resbalan" por paralaje.
+  async function applyGoogleTiles(active: boolean): Promise<void> {
+    const on = await googleTiles.setEnabled(active);
+    panel.setGoogleTiles(on);
+    service.setTilesetGround(on ? googleTiles.groundTileset : null);
+    const hBefore = service.frame.heightM;
+    await reanchorBattery(service.frame.lonDeg, service.frame.latDeg);
+    // Si la cota cambió de verdad (Google vs proveedor), la cámara estaba
+    // referida al suelo antiguo: recolócala sobre la batería nueva.
+    if (Math.abs(service.frame.heightM - hBefore) > 20) flyToBattery(true);
+  }
+
+  /** Re-ancla el marco ENU en (lon, lat) y refresca todo lo que depende de él. */
+  async function reanchorBattery(lonDeg: number, latDeg: number): Promise<void> {
+    await service.setBattery(lonDeg, latDeg);
+    overlay.setFrame(service.frame);
+    preview.clearAll();
+    piece.clearTarget();
+    piece.schedulePreview(0);
+    firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
+    challenge.cancel(); // la diana era de la posición/cota anterior
   }
 
   // P-PRO.1 — la pieza por fin se VE: modelo procedural que apunta en vivo.
@@ -118,6 +139,21 @@ async function boot(): Promise<void> {
     service, overlay, vfx, audio, preview, director, panel, hud, craters, gun,
   );
   const weather = new WeatherPanel(service);
+
+  // Barra de FOV (bajo la meteo): el overlay Three copia la proyección de
+  // Cesium cada frame, así que basta con tocar el frustum del globo.
+  weather.addFovControl(
+    () => {
+      const f = viewer.camera.frustum;
+      return f instanceof Cesium.PerspectiveFrustum && f.fov
+        ? Cesium.Math.toDegrees(f.fov)
+        : 60;
+    },
+    (deg) => {
+      const f = viewer.camera.frustum;
+      if (f instanceof Cesium.PerspectiveFrustum) f.fov = Cesium.Math.toRadians(deg);
+    },
+  );
 
   // P-PRO.5 — tabla de tiro interactiva (arma/carga/meteo actuales).
   const firingTable = new FiringTablePanel(service, panel, () => piece.schedulePreview(0));
@@ -175,17 +211,11 @@ async function boot(): Promise<void> {
       panel.setBatteryActive(false);
       const carto = Cesium.Cartographic.fromCartesian(ecef);
       void (async () => {
-        await service.setBattery(
+        await reanchorBattery(
           Cesium.Math.toDegrees(carto.longitude),
           Cesium.Math.toDegrees(carto.latitude),
         );
-        overlay.setFrame(service.frame);
-        preview.clearAll();
-        piece.clearTarget();
-        piece.schedulePreview(0);
-        firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
         weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
-        challenge.cancel(); // P-PRO.7 — la diana era de la posición anterior
         flyToBattery(true);
         toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
       })();

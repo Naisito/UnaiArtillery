@@ -257,8 +257,17 @@ export class ProjectilePresenter {
     this.trail.finish();
 
     this.vfx.impactExplosion(impact, this.yieldScale);
-    // P-NEXT.7 — huella persistente: quemadura + labio de tierra.
-    this.craters?.add(impact, this.flight.warheadTNTeq);
+    // P-NEXT.7 — huella persistente: quemadura + labio de tierra. El decal se
+    // clava al SUELO VISUAL (teselas 3D / terreno real): la z de física puede
+    // diferir de lo que se ve (corredor interpolado, edificios de Google).
+    if (this.craters) {
+      const craters = this.craters;
+      const yieldEq = this.flight.warheadTNTeq;
+      this.service
+        .visualGroundZ(impact)
+        .then((z) => craters.add(z !== null ? new Vec3(impact.x, impact.y, z) : impact, yieldEq))
+        .catch(() => craters.add(impact, yieldEq));
+    }
 
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(new THREE.Vector3(impact.x, impact.y, impact.z));
