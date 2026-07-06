@@ -7,13 +7,14 @@
 //  previsualiza el arco en vivo y al disparar crea presentadores de
 //  proyectil (con retardos para la salva MRSI).
 // ============================================================================
-import { FireOrder, Vec3 } from './ballistics';
+import { FireOrder, Vec3, WeaponSystem } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { CameraDirector } from './CameraDirector';
 import { ProjectilePresenter } from './ProjectilePresenter';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { TrajectoryPreview } from './TrajectoryPreview';
 import { AudioBoom } from './vfx/AudioBoom';
+import { CraterLayer } from './vfx/CraterLayer';
 import { VfxManager } from './vfx/effects';
 import { ControlPanel } from './ui/ControlPanel';
 import { HUD } from './ui/HUD';
@@ -35,6 +36,7 @@ export class ArtilleryPiece {
     private readonly director: CameraDirector,
     private readonly panel: ControlPanel,
     private readonly hud: HUD,
+    private readonly craters: CraterLayer | null = null,
   ) {}
 
   order(): FireOrder {
@@ -54,11 +56,12 @@ export class ArtilleryPiece {
   async refreshPreview(): Promise<void> {
     const token = ++this.previewToken;
     try {
-      const ring = this.service.approxMaxRange(this.panel.weaponId, this.panel.chargeIndex);
+      const ring = await this.service.approxMaxRange(this.panel.weaponId, this.panel.chargeIndex);
       // dt más grueso para la interactividad; el disparo real usa el dt fino.
-      const result = await this.service.solveTrajectory(this.panel.weaponId, this.order(), undefined, {
-        dt: 0.01,
-      });
+      // El carril 'preview' cancela en el worker los solves ya obsoletos.
+      const result = await this.service.solveTrajectory(
+        this.panel.weaponId, this.order(), undefined, { dt: 0.01 }, 'preview',
+      );
       if (token !== this.previewToken) return; // llegó otro preview más nuevo
       this.preview.showFlight(result);
       this.preview.showRings(ring.minRangeM, ring.maxRangeM);
@@ -67,6 +70,7 @@ export class ArtilleryPiece {
           `TOF ${result.timeOfFlight.toFixed(1)} s · ápice ${(result.apex / 1000).toFixed(1)} km`,
       );
     } catch (err) {
+      if ((err as Error)?.name === 'SupersededError') return; // preview obsoleto
       console.error('[preview]', err);
     }
   }
@@ -165,6 +169,57 @@ export class ArtilleryPiece {
     }
   }
 
+  /**
+   * P-NEXT.7 — salva dispersa ×n: los tiros reales con errores realistas
+   * (σ_V0 ~0.3%, σ_puntería ~1 mil, viento no reportado). Al caer, los
+   * cráteres dibujan la elipse de dispersión y un toast reporta el CEP.
+   * La semilla sale del reloj SOLO aquí, en la app — nunca en tests.
+   */
+  async fireDispersedSalvo(nRounds = 6): Promise<void> {
+    this.audio.unlock();
+    this.panel.setFiring(true);
+    this.panel.setStatus(`Calculando salva dispersa ×${nRounds}…`);
+    try {
+      const weapon = this.service.weapon(this.panel.weaponId);
+      const v0 = WeaponSystem.muzzleVelocity(weapon, this.order());
+      const errors = {
+        muzzleVelocityStd: 0.003 * v0, // ~0.3% lote a lote
+        azimuthStdMils: 1.0,
+        elevationStdMils: 1.0,
+        windStd: 0.6,
+      };
+      const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
+      const res = await this.service.fireDispersed(
+        this.panel.weaponId, this.order(), nRounds, errors, seed,
+      );
+      const flights = res.flights ?? [];
+      if (flights.length === 0) {
+        toast('La salva no devolvió tiros — mira la consola');
+        return;
+      }
+
+      let landed = 0;
+      flights.forEach((flight, i) => {
+        this.spawn(flight.warheadTNTeq, flight, i * 0.5, () => {
+          landed++;
+          if (landed === flights.length) {
+            toast(`Zona batida: CEP ${res.cep.toFixed(0)} m (${flights.length} impactos)`);
+          }
+        });
+      });
+      this.hud.show(flights[0]);
+      this.panel.setStatus(
+        `Salva dispersa ×${flights.length} en el aire · CEP previsto ${res.cep.toFixed(0)} m — ` +
+          'los cráteres dibujarán la elipse.',
+      );
+    } catch (err) {
+      console.error('[disperse]', err);
+      toast('Fallo calculando la salva dispersa');
+    } finally {
+      this.panel.setFiring(false);
+    }
+  }
+
   /** P4.2 — modo comparación: vacío / arrastre / Coriolis / viento. */
   async compare(): Promise<void> {
     this.panel.setStatus('Calculando comparación de físicas…');
@@ -183,18 +238,25 @@ export class ArtilleryPiece {
     }
   }
 
-  private spawn(warheadTNTeq: number, flight: import('./ballistics').FlightResult, delay: number): void {
+  private spawn(
+    warheadTNTeq: number,
+    flight: import('./ballistics').FlightResult,
+    delay: number,
+    onImpactExtra?: () => void,
+  ): ProjectilePresenter {
     const weapon = this.service.weapon(this.panel.weaponId);
     const p = new ProjectilePresenter(
-      this.service, this.overlay, this.vfx, this.audio, weapon, flight, delay,
+      this.service, this.overlay, this.vfx, this.audio, this.craters, weapon, flight, delay,
     );
     p.onImpact = (impactEnu) => {
       this.director.shakeFromImpact(impactEnu, warheadTNTeq); // P0.1+P0.2
       this.director.setFocus(impactEnu); // orbital/dron miran al cráter
+      onImpactExtra?.();
     };
     this.presenters.push(p);
     // Si la cámara está en "seguir", engancha al último proyectil disparado.
     if (this.director.mode === 'follow') this.director.follow(p);
+    return p;
   }
 
   /** Enganchar la cámara de seguimiento al proyectil más reciente. */

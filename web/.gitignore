@@ -3,3 +3,7 @@ dist/
 .env
 src-tauri/target/
 *.local
+
+# Playwright (P-NEXT.6)
+test-results/
+playwright-report/

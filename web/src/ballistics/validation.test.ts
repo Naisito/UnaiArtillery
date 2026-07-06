@@ -16,6 +16,10 @@
 //  These tests run the 'legacy' catalog variant: the exact hand-tuned drag
 //  curves and feature set of the C++ core. The BC-based catalog has its own
 //  suite in fidelity.test.ts.
+//
+//  P-NEXT.2: they also run Atmosphere.legacyTwoLayer() — the exact 2-layer
+//  ISA of the C++ core. The app/catalog default is now the full US Standard
+//  Atmosphere 1976 (tested in fidelity.test.ts), which diverges above 20 km.
 // ============================================================================
 import { describe, expect, it } from 'vitest';
 import { Atmosphere } from './Atmosphere';
@@ -47,7 +51,7 @@ function expectParity(actual: number, reference: number): void {
 // ---------------------------------------------------------------------------
 describe('(0) atmosphere parity with the C++ core', () => {
   it('ISA samples match at 0 / 5 / 15 km', () => {
-    const atmo = new Atmosphere();
+    const atmo = Atmosphere.legacyTwoLayer();
     const s0 = atmo.sample(0);
     const s5 = atmo.sample(5000);
     const s15 = atmo.sample(15000);
@@ -62,7 +66,7 @@ describe('(0) atmosphere parity with the C++ core', () => {
 
 // ---------------------------------------------------------------------------
 describe('(1) vacuum trajectory: RK4 vs analytic', () => {
-  const atmo = new Atmosphere();
+  const atmo = Atmosphere.legacyTwoLayer();
   const cfg = SolverConfig.with({ dt: 0.001, enableCoriolis: false });
   const solver = new BallisticsSolver(atmo, cfg);
 
@@ -102,7 +106,7 @@ describe('(1) vacuum trajectory: RK4 vs analytic', () => {
 // aerodynamic drag) against a fine-step reference. In vacuum the ODE is
 // linear and RK4 is exact — useless for gauging order.
 function dragStatePosition(dt: number): Vec3 {
-  const atmo = new Atmosphere();
+  const atmo = Atmosphere.legacyTwoLayer();
   const cfg = SolverConfig.with({
     dt,
     enableCoriolis: false,
@@ -129,7 +133,7 @@ describe('(2) RK4 convergence order on a nonlinear (drag) problem', () => {
 
 // ---------------------------------------------------------------------------
 function maxRange(w: Weapon, chargeIndex: number): number {
-  const atmo = new Atmosphere();
+  const atmo = Atmosphere.legacyTwoLayer();
   const cfg = SolverConfig.with({ dt: 0.005, enableCoriolis: true, latitudeDeg: 40.0 });
   const fc = new WeaponSystem(atmo, cfg);
   const v0 = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
@@ -170,7 +174,7 @@ describe('(3) published max ranges (legacy drag curves)', () => {
 
 // ---------------------------------------------------------------------------
 describe('(4) crosswind deflection', () => {
-  const atmo = new Atmosphere();
+  const atmo = Atmosphere.legacyTwoLayer();
   // Wind FROM the South (bearing 180) pushes an East-bound shell to +North.
   atmo.windField = () => Atmosphere.steadyWind(15.0, 180.0);
   const cfg = SolverConfig.with({ dt: 0.005, enableCoriolis: false });
@@ -190,7 +194,7 @@ describe('(4) crosswind deflection', () => {
 
 // ---------------------------------------------------------------------------
 describe('(5) fire-control inverse solve', () => {
-  const atmo = new Atmosphere();
+  const atmo = Atmosphere.legacyTwoLayer();
   const cfg = SolverConfig.with({ dt: 0.005 });
   const fc = new WeaponSystem(atmo, cfg);
   const m777 = WeaponCatalog.m777('legacy');

@@ -14,16 +14,27 @@ export interface ControlCallbacks {
   onFire(): void;
   onMRSI(rounds: number): void;
   onCompare(): void;
+  /** P-NEXT.7 — salva dispersa (zona batida) y limpieza de cráteres. */
+  onDisperse(rounds: number): void;
+  onClearCraters(): void;
   onCameraMode(mode: CameraMode): void;
   onPickTarget(active: boolean): void;
   onMoveBattery(active: boolean): void;
+  /** P-NEXT.3 — toggle de Google Photorealistic 3D Tiles. */
+  onGoogleTiles(active: boolean): void;
 }
 
 const WEAPON_LABELS: Record<WeaponId, string> = {
   mortar120: '120 mm Mortero pesado',
   m777: 'M777 · Obús 155 mm',
+  m109: 'M109A7 Paladin · 155 mm AP',
+  pion2s7: '2S7 Pion · Cañón 203 mm',
+  excalibur: 'M982 Excalibur · 155 mm guiada',
   gmlrs: 'HIMARS / GMLRS 227 mm',
+  m26: 'M26 MLRS · 227 mm (salva)',
+  ergmlrs: 'ER GMLRS · 227 mm 150 km',
   tacticalMissile: 'Misil balístico táctico',
+  prsm: 'PrSM · Misil 500 km',
 };
 
 export class ControlPanel {
@@ -43,6 +54,7 @@ export class ControlPanel {
   private fireBtn!: HTMLButtonElement;
   private pickBtn!: HTMLButtonElement;
   private batteryBtn!: HTMLButtonElement;
+  private googleBtn!: HTMLButtonElement;
   private cameraBtns = new Map<CameraMode, HTMLButtonElement>();
 
   constructor(private readonly cb: ControlCallbacks) {
@@ -162,7 +174,18 @@ export class ControlPanel {
     compare.title = 'Vacío vs arrastre vs Coriolis vs viento (didáctico)';
     compare.onclick = () => this.cb.onCompare();
 
-    grid.append(this.pickBtn, this.batteryBtn, mrsi, compare);
+    const disperse = document.createElement('button');
+    disperse.textContent = 'Salva dispersa ×6';
+    disperse.title =
+      'Seis tiros con errores realistas (σ V0, puntería, viento): los cráteres dibujan la elipse';
+    disperse.onclick = () => this.cb.onDisperse(6);
+
+    const clearCraters = document.createElement('button');
+    clearCraters.textContent = 'Limpiar cráteres';
+    clearCraters.title = 'Borra todas las huellas de impacto del terreno';
+    clearCraters.onclick = () => this.cb.onClearCraters();
+
+    grid.append(this.pickBtn, this.batteryBtn, mrsi, compare, disperse, clearCraters);
     el.appendChild(grid);
 
     this.fireBtn = document.createElement('button');
@@ -186,12 +209,18 @@ export class ControlPanel {
     el.appendChild(camH);
     const camGrid = document.createElement('div');
     camGrid.className = 'btn-grid';
-    const modes: [CameraMode, string][] = [
-      ['free', 'Libre'], ['orbital', 'Orbital'], ['follow', 'Seguir'], ['drone', 'Dron'],
+    const modes: [CameraMode, string, string?][] = [
+      ['free', 'Libre'],
+      ['orbital', 'Orbital'],
+      ['follow', 'Seguir', 'Persigue el proyectil: arrastra para orbitar, rueda para zoom'],
+      ['drone', 'Dron'],
+      ['cabin', 'Cabina', 'Cámara en la boca del arma: gira con la rueda del cockpit'],
+      ['fps', '1ª persona', 'Clic captura el ratón · WASD mover · Espacio/C subir/bajar · Shift esprintar · rueda velocidad · Esc suelta'],
     ];
-    for (const [mode, label] of modes) {
+    for (const [mode, label, title] of modes) {
       const b = document.createElement('button');
       b.textContent = label;
+      if (title) b.title = title;
       b.onclick = () => {
         this.markCamera(mode);
         this.cb.onCameraMode(mode);
@@ -202,8 +231,25 @@ export class ControlPanel {
     el.appendChild(camGrid);
     this.markCamera('free');
 
+    // -- Mapa (P-NEXT.3) -------------------------------------------------------
+    this.googleBtn = document.createElement('button');
+    this.googleBtn.className = 'wide';
+    this.googleBtn.textContent = '🏙 Edificios 3D (Google)';
+    this.googleBtn.title =
+      'Photorealistic 3D Tiles: ciudades reales. Solo visual — los impactos se calculan contra el terreno.';
+    this.googleBtn.style.width = '100%';
+    this.googleBtn.style.marginTop = '6px';
+    this.googleBtn.onclick = () =>
+      this.cb.onGoogleTiles(!this.googleBtn.classList.contains('toggled'));
+    el.appendChild(this.googleBtn);
+
     this.rebuildCharges();
     this.applyWeaponLimits();
+  }
+
+  /** Refleja el estado REAL de los edificios 3D (la carga puede fallar). */
+  setGoogleTiles(on: boolean): void {
+    this.googleBtn.classList.toggle('toggled', on);
   }
 
   weapon(): Weapon { return WeaponCatalog.get(this.weaponId); }

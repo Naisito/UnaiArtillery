@@ -53,6 +53,8 @@ export interface DispersionResult {
   impacts: Vec3[];    // ENU impact points
   meanImpact: Vec3;   // center of the impact cloud
   cep: number;        // radius containing 50% of impacts around the mean (m)
+  /** Full trajectories, only when requested (P-NEXT.7: animate the salvo). */
+  flights?: FlightResult[];
 }
 
 // ---- P2.2 -------------------------------------------------------------------
@@ -200,11 +202,13 @@ export class WeaponSystem {
     n: number,
     errors: DispersionErrors,
     seed: number,
+    collectFlights = false,
   ): DispersionResult {
     const rng = new DeterministicRng(seed);
     const v0Nominal = WeaponSystem.muzzleVelocity(w, order);
     const baseWind = this.atmo.windField;
     const impacts: Vec3[] = [];
+    const flights: FlightResult[] = [];
 
     for (let i = 0; i < n; i++) {
       const v0 = v0Nominal + rng.gaussian(0, errors.muzzleVelocityStd ?? 0);
@@ -225,6 +229,7 @@ export class WeaponSystem {
       const v = WeaponSystem.launchVelocity(az, el, v0);
       const fr = solver.integrate(w.round, muzzlePos, v);
       impacts.push(fr.impactPoint);
+      if (collectFlights) flights.push(fr);
     }
 
     // Center of the impact cloud, then CEP = median radial miss around it.
@@ -235,7 +240,9 @@ export class WeaponSystem {
       .map((p) => new Vec3(p.x - mean.x, p.y - mean.y, 0).length())
       .sort((a, b) => a - b);
     const cep = radii.length ? radii[Math.max(0, Math.ceil(radii.length * 0.5) - 1)] : 0;
-    return { impacts, meanImpact: mean, cep };
+    const out: DispersionResult = { impacts, meanImpact: mean, cep };
+    if (collectFlights) out.flights = flights;
+    return out;
   }
 
   // ---------------------------------------------------------------------------

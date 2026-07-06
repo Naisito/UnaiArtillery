@@ -1,7 +1,7 @@
 // Barrel del núcleo balístico (porte TS validado del /core C++).
 export { Vec3 } from './Vec3';
 export { Atmosphere } from './Atmosphere';
-export type { AtmoSample, WindProfilePoint, WindField } from './Atmosphere';
+export type { AtmoSample, WindProfilePoint, WindField, AtmosphereModel } from './Atmosphere';
 export { Munition, RocketMotor, GuidanceSpec } from './Munition';
 export type { DragPoint, DragModel } from './Munition';
 export { G1_TABLE, G7_TABLE, sampleDragTable, sectionalDensityLbIn2 } from './DragTables';

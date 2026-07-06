@@ -1,20 +1,33 @@
 // ============================================================================
-//  BallisticsService.ts — Servicio central de balística.  [P-WEB.2]
+//  BallisticsService.ts — Servicio central de balística.  [P-WEB.2 / P-NEXT.5]
 //
 //  Equivalente web de UBallisticsWorldSubsystem: posee la atmósfera, la
 //  configuración del solver y la dirección de tiro, ancla el marco ENU en la
-//  posición real de la batería y da al solver un callback de altura de
-//  terreno construido MUESTREANDO el relieve de Cesium a lo largo del
-//  corredor de tiro (async) antes de integrar — así el impacto cae sobre la
-//  ladera real y la integración en sí es síncrona y pura.
+//  posición real de la batería y muestrea el relieve de Cesium a lo largo del
+//  corredor de tiro (async) antes de integrar.
+//
+//  P-NEXT.5: la ejecución del núcleo vive en un Web Worker
+//  (src/ballistics.worker.ts) para que apuntar un misil a 300 km no congele
+//  el globo. Este servicio conserva su API async: serializa arma (por id),
+//  atmósfera (knobs + WindSpec) y terreno (perfil del corredor ya muestreado,
+//  Cesium no entra al worker) como datos planos, y rehidrata los Vec3 de los
+//  resultados. Los previews van por un "carril" que cancela solves obsoletos.
+//  Sin Worker disponible (p. ej. tests), cae a ejecutar en línea.
 // ============================================================================
 import * as Cesium from 'cesium';
 import { GeoFrame } from './frame';
-import {
-  Atmosphere, FlightResult, SolverConfig, Vec3, Weapon, WeaponCatalog, WeaponId,
-  WeaponSystem, WindProfilePoint,
+import { Atmosphere, Vec3, Weapon, WeaponCatalog, WeaponId, WindProfilePoint } from './ballistics';
+import type {
+  DispersionErrors, DispersionResult, FireOrder, FlightResult, MrsiRound, SolveResult,
+  SolverConfig,
 } from './ballistics';
-import type { FireOrder, MrsiRound } from './ballistics';
+import {
+  AtmoSpec, CancelMessage, CompareEntry, RangeRing, SolverConfigSpec, TerrainSpec,
+  WindSpec, WorkerRequest, WorkerRequestBody, WorkerResponse, executeRequest, hydrateCompare,
+  hydrateDispersion, hydrateFlightResult, windFieldOf,
+} from './ballistics/WorkerProtocol';
+
+export type { RangeRing } from './ballistics/WorkerProtocol';
 
 export interface TargetSolution {
   found: boolean;
@@ -24,12 +37,16 @@ export interface TargetSolution {
   rangeM: number;
 }
 
-export interface RangeRing { minRangeM: number; maxRangeM: number; }
-
-/** Callback de terreno: (este, norte) -> altura z ENU en metros. */
-export type TerrainFn = (east: number, north: number) => number;
+/** Un solve de carril (preview) fue reemplazado por otro más nuevo. */
+export class SupersededError extends Error {
+  constructor() {
+    super('solve superseded by a newer request');
+    this.name = 'SupersededError';
+  }
+}
 
 export class BallisticsService {
+  /** Atmósfera local: muestreo síncrono para VFX/audio (el worker usa su copia). */
   readonly atmo = new Atmosphere();
   frame: GeoFrame;
   /** Altura de la boca del arma sobre el suelo (m). */
@@ -37,11 +54,31 @@ export class BallisticsService {
   /** Paso de integración para tiro/preview (el validado en tests). */
   dt = 0.005;
 
+  private windSpec: WindSpec = { kind: 'none' };
   private readonly ringCache = new Map<string, RangeRing>();
+  private readonly ringInFlight = new Map<string, Promise<RangeRing>>();
+
+  private worker: Worker | null = null;
+  private nextId = 1;
+  private readonly pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: unknown) => void }
+  >();
+  private readonly laneLatest = new Map<string, number>();
 
   constructor(private readonly viewer: Cesium.Viewer) {
     // Anclaje por defecto: Sierra de Guadarrama (paisaje con relieve).
     this.frame = new GeoFrame(-3.9, 40.75, 0);
+    try {
+      this.worker = new Worker(new URL('./ballistics.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      this.worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
+      this.worker.onerror = (ev) => console.error('[ballistics.worker]', ev.message ?? ev);
+    } catch {
+      console.warn('[BallisticsService] Sin Web Worker: los solves corren en el hilo principal.');
+      this.worker = null;
+    }
   }
 
   /** Posición ENU de la boca del arma. */
@@ -57,6 +94,7 @@ export class BallisticsService {
     const h = await this.sampleHeight(Cesium.Cartographic.fromDegrees(lonDeg, latDeg));
     this.frame = new GeoFrame(lonDeg, latDeg, h);
     this.ringCache.clear();
+    this.ringInFlight.clear();
   }
 
   weapon(id: WeaponId): Weapon { return WeaponCatalog.get(id); }
@@ -64,15 +102,14 @@ export class BallisticsService {
   // -- Meteorología (en vivo; el preview se recalcula al cambiar) -----------
   setSteadyWind(speedMS: number, fromBearingDeg: number): void {
     // Ganancia suave con la altitud (tipo Ekman), saturada a 2x — igual que
-    // hacía la capa Unreal.
-    this.atmo.windField = (pos) => {
-      const gain = Math.min(2.0, Math.max(1.0, 1.0 + pos.z / 8000.0));
-      return Atmosphere.steadyWind(speedMS * gain, fromBearingDeg);
-    };
+    // hacía la capa Unreal. El spec serializable mantiene al worker en sync.
+    this.windSpec = { kind: 'steady', speedMS, fromBearingDeg, ekman: true };
+    this.atmo.windField = windFieldOf(this.windSpec);
   }
 
   setWindProfile(points: WindProfilePoint[]): void {
-    this.atmo.setWindProfile(points);
+    this.windSpec = { kind: 'profile', points };
+    this.atmo.windField = windFieldOf(this.windSpec);
   }
 
   setSeaLevelConditions(temperatureK: number, pressurePa: number): void {
@@ -85,29 +122,68 @@ export class BallisticsService {
     return this.atmo.sample(Math.max(0, altitudeM + this.frame.heightM)).soundSpeed;
   }
 
-  // -- Configuración del solver ---------------------------------------------
-  makeConfig(terrain?: TerrainFn, overrides: Partial<SolverConfig> = {}): SolverConfig {
-    const cfg = SolverConfig.with({
+  // -- Serialización hacia el worker -----------------------------------------
+  private atmoSpec(): AtmoSpec {
+    return {
+      model: this.atmo.model,
+      seaLevelTemperatureK: this.atmo.seaLevelTemperatureK,
+      seaLevelPressurePa: this.atmo.seaLevelPressurePa,
+      wind: this.windSpec,
+    };
+  }
+
+  private makeConfigSpec(overrides: SolverConfigSpec = {}): SolverConfigSpec {
+    return {
       dt: this.dt,
       latitudeDeg: this.frame.latDeg,
       anchorLonDeg: this.frame.lonDeg,
       enableCoriolis: true,
       groundZ: 0.0, // el marco está anclado en el suelo de la batería
       ...overrides,
+    };
+  }
+
+  private call<T>(req: WorkerRequestBody, lane?: string): Promise<T> {
+    const id = this.nextId++;
+    if (lane) {
+      const prev = this.laneLatest.get(lane);
+      if (prev !== undefined && this.pending.has(prev) && this.worker) {
+        const cancel: CancelMessage = { cancel: prev };
+        this.worker.postMessage(cancel);
+      }
+      this.laneLatest.set(lane, id);
+    }
+    const request = { ...req, id } as WorkerRequest;
+    if (!this.worker) {
+      try {
+        return Promise.resolve(executeRequest(request) as T);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    }
+    return new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.worker!.postMessage(request);
     });
-    if (terrain) cfg.terrainHeight = terrain;
-    return cfg;
+  }
+
+  private onWorkerMessage(msg: WorkerResponse): void {
+    const p = this.pending.get(msg.id);
+    if (!p) return;
+    this.pending.delete(msg.id);
+    if (msg.ok) p.resolve(msg.result);
+    else if (msg.cancelled) p.reject(new SupersededError());
+    else p.reject(new Error(msg.error));
   }
 
   // -- Muestreo del corredor de tiro ----------------------------------------
   /**
    * Muestrea la altura del terreno a lo largo del rumbo `azimuthDeg` hasta
-   * `maxRangeM` y devuelve un callback (este, norte) -> z ENU que interpola
-   * por distancia proyectada sobre el rayo. La deriva lateral de un tiro es
-   * pequeña frente al paso de muestreo, así que un perfil 1D basta (y evita
-   * miles de raycasts).
+   * `maxRangeM` y devuelve el perfil serializable (alturas + paso + rumbo)
+   * que viaja al worker. La deriva lateral de un tiro es pequeña frente al
+   * paso de muestreo, así que un perfil 1D basta (y evita miles de raycasts).
    */
-  async sampleCorridor(azimuthDeg: number, maxRangeM: number, stepM = 400): Promise<TerrainFn> {
+  async sampleCorridor(azimuthDeg: number, maxRangeM: number, stepM = 400): Promise<TerrainSpec> {
     const az = (azimuthDeg * Math.PI) / 180.0;
     const dir = { e: Math.sin(az), n: Math.cos(az) };
     const count = Math.max(2, Math.ceil((maxRangeM * 1.15) / stepM) + 1);
@@ -118,60 +194,70 @@ export class BallisticsService {
     }
     const heights = await this.sampleHeights(cartos);
     const anchorH = this.frame.heightM;
-    const profile = heights.map((h) => h - anchorH); // alturas en z ENU
-
-    return (east: number, north: number) => {
-      const s = east * dir.e + north * dir.n; // distancia proyectada
-      if (s <= 0) return profile[0];
-      const k = s / stepM;
-      const i = Math.floor(k);
-      if (i >= profile.length - 1) return profile[profile.length - 1];
-      const f = k - i;
-      return profile[i] + f * (profile[i + 1] - profile[i]);
+    return {
+      dirE: dir.e,
+      dirN: dir.n,
+      stepM,
+      profile: heights.map((h) => h - anchorH), // alturas en z ENU
     };
   }
 
   // -- Tiro y dirección de fuego ---------------------------------------------
   /** Alcance máximo aproximado de un arma+carga (para corredor y anillos). */
-  approxMaxRange(id: WeaponId, chargeIndex: number): RangeRing {
+  approxMaxRange(id: WeaponId, chargeIndex: number): Promise<RangeRing> {
     const key = `${id}:${chargeIndex}`;
     const cached = this.ringCache.get(key);
-    if (cached) return cached;
+    if (cached) return Promise.resolve(cached);
+    const inFlight = this.ringInFlight.get(key);
+    if (inFlight) return inFlight;
 
-    const w = this.weapon(id);
-    const cfg = this.makeConfig(undefined, { dt: 0.02, maxFlight: 700 });
-    const fc = new WeaponSystem(this.atmo, cfg);
-    const v0 = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
-    let maxR = 0;
-    let minR = Number.POSITIVE_INFINITY;
-    for (let el = w.minElevationDeg; el <= w.maxElevationDeg; el += 5.0) {
-      const r = fc.rangeForElevation(w, this.muzzleEnu, 0, v0, el);
-      maxR = Math.max(maxR, r);
-      minR = Math.min(minR, r);
-    }
-    const ring = { minRangeM: minR, maxRangeM: maxR };
-    this.ringCache.set(key, ring);
-    return ring;
+    const p = this.call<RangeRing>({
+      op: 'approxMaxRange',
+      weaponId: id,
+      chargeIndex,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ dt: 0.02, maxFlight: 700 }),
+    }).then((ring) => {
+      this.ringCache.set(key, ring);
+      this.ringInFlight.delete(key);
+      return ring;
+    });
+    this.ringInFlight.set(key, p);
+    return p;
   }
 
   /**
    * Vuela un tiro completo contra el relieve real. `targetEnu` activa el
-   * guiado Pro-Nav en municiones guiadas (GMLRS/misil).
+   * guiado Pro-Nav en municiones guiadas (GMLRS/misil). `lane` agrupa solves
+   * reemplazables (preview): uno nuevo cancela al anterior pendiente.
    */
   async solveTrajectory(
     id: WeaponId,
     order: FireOrder,
     targetEnu?: Vec3,
     overrides: Partial<SolverConfig> = {},
+    lane?: string,
   ): Promise<FlightResult> {
-    const w = this.weapon(id);
-    const ring = this.approxMaxRange(id, order.chargeIndex);
+    const ring = await this.approxMaxRange(id, order.chargeIndex);
     const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM);
     // Misil de largo alcance: integra sobre Tierra esférica (P1.4, >50 km).
     const spherical = ring.maxRangeM > 50_000;
-    const cfg = this.makeConfig(terrain, { sphericalEarth: spherical, maxFlight: 700, ...overrides });
-    const fc = new WeaponSystem(this.atmo, cfg);
-    return fc.fire(w, this.muzzleEnu, order, targetEnu);
+    const { terrainHeight: _t, gravity: _g, ...plainOverrides } = overrides;
+    const raw = await this.call<FlightResult>(
+      {
+        op: 'solveTrajectory',
+        weaponId: id,
+        order,
+        targetEnu: targetEnu ?? null,
+        muzzle: this.muzzleEnu,
+        atmo: this.atmoSpec(),
+        cfg: this.makeConfigSpec({ sphericalEarth: spherical, maxFlight: 700, ...plainOverrides }),
+        terrain,
+      },
+      lane,
+    );
+    return hydrateFlightResult(raw);
   }
 
   /**
@@ -189,12 +275,20 @@ export class BallisticsService {
     const azimuthDeg = (Math.atan2(dE, dN) * 180.0) / Math.PI;
     const rangeM = Math.hypot(dE, dN);
 
-    const w = this.weapon(id);
     const terrain = await this.sampleCorridor(azimuthDeg, Math.max(rangeM * 1.3, 2000));
     const spherical = rangeM > 50_000;
-    const cfg = this.makeConfig(terrain, { sphericalEarth: spherical, maxFlight: 700 });
-    const fc = new WeaponSystem(this.atmo, cfg);
-    const sr = fc.solveForRange(w, this.muzzleEnu, rangeM, azimuthDeg, chargeIndex, preferHighAngle);
+    const sr = await this.call<SolveResult>({
+      op: 'solveForTarget',
+      weaponId: id,
+      targetRangeM: rangeM,
+      azimuthDeg,
+      chargeIndex,
+      preferHighAngle,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ sphericalEarth: spherical, maxFlight: 700 }),
+      terrain,
+    });
     return {
       found: sr.found,
       azimuthDeg,
@@ -204,6 +298,35 @@ export class BallisticsService {
     };
   }
 
+  /**
+   * P-NEXT.7 — salva dispersa: n tiros con errores realistas de V0/puntería/
+   * viento (RNG determinista por semilla). Devuelve impactos, CEP y los
+   * vuelos completos para animarlos y dejar cráteres.
+   */
+  async fireDispersed(
+    id: WeaponId,
+    order: FireOrder,
+    nRounds: number,
+    errors: DispersionErrors,
+    seed: number,
+  ): Promise<DispersionResult> {
+    const ring = await this.approxMaxRange(id, order.chargeIndex);
+    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM);
+    const raw = await this.call<DispersionResult>({
+      op: 'fireDispersed',
+      weaponId: id,
+      order,
+      nRounds,
+      errors,
+      seed,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ sphericalEarth: ring.maxRangeM > 50_000, maxFlight: 700 }),
+      terrain,
+    });
+    return hydrateDispersion(raw);
+  }
+
   /** P2.2 — resuelve una salva MRSI hacia un alcance dado. */
   async solveMRSI(
     id: WeaponId,
@@ -211,11 +334,18 @@ export class BallisticsService {
     rangeM: number,
     nRounds: number,
   ): Promise<MrsiRound[]> {
-    const w = this.weapon(id);
     const terrain = await this.sampleCorridor(azimuthDeg, rangeM * 1.3);
-    const cfg = this.makeConfig(terrain, { dt: 0.01 });
-    const fc = new WeaponSystem(this.atmo, cfg);
-    return fc.solveMRSI(w, this.muzzleEnu, rangeM, azimuthDeg, nRounds);
+    return this.call<MrsiRound[]>({
+      op: 'solveMRSI',
+      weaponId: id,
+      targetRangeM: rangeM,
+      azimuthDeg,
+      nRounds,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ dt: 0.01 }),
+      terrain,
+    });
   }
 
   /**
@@ -226,38 +356,19 @@ export class BallisticsService {
   async compareTrajectories(
     id: WeaponId,
     order: FireOrder,
-  ): Promise<{ label: string; cssColor: string; result: FlightResult }[]> {
-    const w = this.weapon(id);
-    const ring = this.approxMaxRange(id, order.chargeIndex);
+  ): Promise<CompareEntry[]> {
+    const ring = await this.approxMaxRange(id, order.chargeIndex);
     const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM * 1.6);
-
-    const calm = this.atmo.clone();
-    calm.windField = () => new Vec3(0, 0, 0);
-
-    const run = (atmo: Atmosphere, overrides: Partial<SolverConfig>): FlightResult => {
-      const cfg = this.makeConfig(terrain, { maxFlight: 700, ...overrides });
-      const fc = new WeaponSystem(atmo, cfg);
-      return fc.fire(w, this.muzzleEnu, order);
-    };
-
-    return [
-      {
-        label: 'Vacío (sin atmósfera)', cssColor: '#9aa4ad',
-        result: run(calm, { enableDrag: false, enableCoriolis: false }),
-      },
-      {
-        label: 'Con arrastre', cssColor: '#4dc3ff',
-        result: run(calm, { enableCoriolis: false }),
-      },
-      {
-        label: 'Arrastre + Coriolis', cssColor: '#ffb545',
-        result: run(calm, {}),
-      },
-      {
-        label: 'Todo + viento', cssColor: '#ff5d5d',
-        result: run(this.atmo, {}),
-      },
-    ];
+    const raw = await this.call<CompareEntry[]>({
+      op: 'compareTrajectories',
+      weaponId: id,
+      order,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ maxFlight: 700 }),
+      terrain,
+    });
+    return hydrateCompare(raw);
   }
 
   // -- Terreno ---------------------------------------------------------------

@@ -13,6 +13,7 @@ import { FlightResult, Vec3, Weapon } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { makeGlowSprite } from './render/PostFX';
+import { CraterLayer } from './vfx/CraterLayer';
 import { ShockConeFX, TrailFX, VfxManager } from './vfx/effects';
 import { AudioBoom } from './vfx/AudioBoom';
 
@@ -52,6 +53,8 @@ export class ProjectilePresenter {
     private readonly overlay: ThreeOverlay,
     private readonly vfx: VfxManager,
     private readonly audio: AudioBoom,
+    /** P-NEXT.7 — capa de cráteres persistentes (null = sin marca). */
+    private readonly craters: CraterLayer | null,
     readonly weapon: Weapon,
     readonly flight: FlightResult,
     startDelay = 0.0,
@@ -236,6 +239,8 @@ export class ProjectilePresenter {
     this.trail.finish();
 
     this.vfx.impactExplosion(impact, this.yieldScale);
+    // P-NEXT.7 — huella persistente: quemadura + labio de tierra.
+    this.craters?.add(impact, this.flight.warheadTNTeq);
 
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(new THREE.Vector3(impact.x, impact.y, impact.z));

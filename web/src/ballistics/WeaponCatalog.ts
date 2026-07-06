@@ -6,7 +6,9 @@
 //  coefficient, the way real ballistic data is published. The BCs below are
 //  CALIBRATED against this solver so each weapon reproduces its published
 //  maximum range (see physics tests); treat them as engineering fits, not
-//  measured values.
+//  measured values. Re-calibrated under the ISA-76 atmosphere (P-NEXT.2):
+//  the original values held within 0.3% — below 20 km both atmosphere models
+//  are identical and that is where almost all the drag happens.
 //
 //  Each factory also accepts variant 'legacy' returning the original
 //  hand-tuned explicit Cd(Mach) curve with every P1 feature off — that is the
@@ -15,7 +17,9 @@
 // ============================================================================
 import { Munition } from './Munition';
 
-export type WeaponId = 'mortar120' | 'm777' | 'gmlrs' | 'tacticalMissile';
+export type WeaponId =
+  | 'mortar120' | 'm777' | 'm109' | 'pion2s7' | 'excalibur'
+  | 'gmlrs' | 'm26' | 'ergmlrs' | 'tacticalMissile' | 'prsm';
 export type CatalogVariant = 'bc' | 'legacy';
 
 /** A propellant "charge" (zone): same shell, different muzzle velocity. */
@@ -215,25 +219,223 @@ export class WeaponCatalog {
     return w;
   }
 
+  // ==========================================================================
+  //  P-NEXT.4 — arsenal ampliado (datos públicos, BC calibrado con
+  //  tools/calibrate_bc.ts contra el alcance máximo publicado, ISA-76).
+  //  Estas armas solo existen en variante BC (no hay espejo C++ que igualar).
+  // ==========================================================================
+
+  // ---- M109A7 Paladin: obús autopropulsado 155 mm/L39 ----------------------
+  // Mismo proyectil M107 que el M777; cañón L39 con cargas hasta ~684 m/s.
+  // Calibrado a ~24 km (banda publicada del sistema con munición asistida).
+  static m109Paladin(): Weapon {
+    const m = new Munition();
+    m.name = 'M107 155mm HE (L39)';
+    m.mass = 43.2;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 6.6;
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 5.13; // calibrado: ~24 km
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0; // estriado 1/20, dextrógiro
+    m.rightHandTwist = true;
+
+    const w = new Weapon();
+    w.name = 'M109A7 Paladin 155mm';
+    w.category = 'Howitzer';
+    w.minElevationDeg = 0.0;
+    w.maxElevationDeg = 75.0;
+    w.traverseDeg = 360.0; // torreta
+    w.reloadTime = 7.0;
+    w.round = m;
+    w.charges = [
+      { name: 'Charge 3', muzzleVelocity: 310.0 },
+      { name: 'Charge 5', muzzleVelocity: 470.0 },
+      { name: 'Charge 7', muzzleVelocity: 585.0 },
+      { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
+    ];
+    return w;
+  }
+
+  // ---- 2S7 Pion: cañón pesado 203 mm ---------------------------------------
+  // Proyectil OF-43 ~110 kg, v0 ~960 m/s, ~37.5 km sin asistencia.
+  static pion2S7(): Weapon {
+    const m = new Munition();
+    m.name = 'OF-43 203mm HE';
+    m.mass = 110.0;
+    m.diameter = 0.203;
+    m.muzzleVelocity = 960.0;
+    m.warheadMassTNTeq = 20.0; // ~17.8 kg de explosivo
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 4.58; // calibrado: ~37.5 km
+    m.spinStabilized = true;
+    m.twistCalibers = 25.0;
+    m.rightHandTwist = true;
+
+    const w = new Weapon();
+    w.name = '2S7 Pion 203mm';
+    w.category = 'Howitzer';
+    w.minElevationDeg = 0.0;
+    w.maxElevationDeg = 60.0;
+    w.traverseDeg = 30.0;
+    w.reloadTime = 15.0; // cadencia real ~1.5 disparos/min
+    w.round = m;
+    w.charges = [
+      { name: 'Carga reducida', muzzleVelocity: 550.0 },
+      { name: 'Carga intermedia', muzzleVelocity: 760.0 },
+      { name: 'Carga plena', muzzleVelocity: 960.0 },
+    ];
+    return w;
+  }
+
+  // ---- M982 Excalibur: 155 mm guiada ---------------------------------------
+  // 48 kg, base-bleed + planeo con canards (~40 km desde L39). El planeo no
+  // se modela: el BC calibrado lo absorbe (por eso i queda <0.3). Guiado
+  // Pro-Nav terminal, CEP <5 m con objetivo marcado.
+  static excalibur(): Weapon {
+    const m = new Munition();
+    m.name = 'M982 Excalibur 155mm';
+    m.mass = 48.0;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 10.0; // PBXN-9 ~9.7 kg
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 25.0; // calibrado: ~40 km (base-bleed + planeo)
+    // Obturador deslizante: sale casi sin giro y vuela con canards.
+    m.spinStabilized = false;
+    m.guidance.enabled = true;
+    m.guidance.navConstant = 3.5;
+    m.guidance.maxLateralG = 6.0;
+
+    const w = new Weapon();
+    w.name = 'M982 Excalibur (155mm L39)';
+    w.category = 'Howitzer';
+    w.minElevationDeg = 15.0;
+    w.maxElevationDeg = 70.0;
+    w.traverseDeg = 45.0;
+    w.reloadTime = 8.0;
+    w.round = m;
+    w.charges = []; // se dispara a carga máxima para el alcance guiado
+    return w;
+  }
+
+  // ---- M26 MLRS: cohete 227 mm NO guiado ------------------------------------
+  // 306 kg al lanzamiento, ~32 km. Protagonista del modo dispersión: sin
+  // guiado, la salva de 6 dibuja la elipse sobre el terreno.
+  static m26MLRS(): Weapon {
+    const m = new Munition();
+    m.name = 'M26 227mm (salva)';
+    m.mass = 306.0;
+    m.diameter = 0.227;
+    m.muzzleVelocity = 35.0;
+    m.warheadMassTNTeq = 45.0; // 644 submuniciones M77 (~156 kg de carga útil)
+    m.motor.enabled = true;
+    m.motor.thrust = 58000.0;  // N
+    m.motor.burnTime = 3.2;    // s
+    m.motor.propellantMass = 98.0;
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 9.94; // calibrado: ~32 km
+    // Sin guiado: dispersión real de cohete de área.
+
+    const w = new Weapon();
+    w.name = 'M270 / M26 MLRS';
+    w.category = 'Rocket';
+    w.minElevationDeg = 25.0;
+    w.maxElevationDeg = 60.0;
+    w.traverseDeg = 360.0;
+    w.reloadTime = 2.5; // ripple de 6-12 cohetes
+    w.round = m;
+    w.charges = [];
+    return w;
+  }
+
+  // ---- ER GMLRS: 227 mm guiado de largo alcance -----------------------------
+  // Motor mayor que el GMLRS (~150 km). Modo esférico automático (>50 km).
+  static erGMLRS(): Weapon {
+    const m = new Munition();
+    m.name = 'ER GMLRS 227mm';
+    m.mass = 330.0;
+    m.diameter = 0.227;
+    m.muzzleVelocity = 35.0;
+    m.warheadMassTNTeq = 40.0; // cabeza unitaria ~90 kg
+    m.motor.enabled = true;
+    m.motor.thrust = 70000.0;  // N (Isp ~290 s)
+    m.motor.burnTime = 5.5;    // s
+    m.motor.propellantMass = 135.0;
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 12.53; // calibrado: ~150 km (esférico)
+    m.guidance.enabled = true;
+    m.guidance.navConstant = 3.5;
+    m.guidance.maxLateralG = 8.0;
+
+    const w = new Weapon();
+    w.name = 'HIMARS / ER GMLRS';
+    w.category = 'Rocket';
+    w.minElevationDeg = 25.0;
+    w.maxElevationDeg = 60.0;
+    w.traverseDeg = 360.0;
+    w.reloadTime = 3.0;
+    w.round = m;
+    w.charges = [];
+    return w;
+  }
+
+  // ---- PrSM (clase): misil táctico ~500 km ----------------------------------
+  // Sucesor del ATACMS (2 por pod, más esbelto). Isp ~310 s, dv ~2.9 km/s.
+  static prsm(): Weapon {
+    const m = new Munition();
+    m.name = 'PrSM (clase 500 km)';
+    m.mass = 1400.0;
+    m.diameter = 0.43;
+    m.muzzleVelocity = 25.0;
+    m.warheadMassTNTeq = 200.0;
+    m.motor.enabled = true;
+    m.motor.thrust = 120000.0; // N (Isp ~306 s, dv ≈ 2.5 km/s)
+    m.motor.burnTime = 20.0;   // s
+    m.motor.propellantMass = 800.0;
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 14.02; // calibrado: ~500 km (esférico)
+    m.guidance.enabled = true;
+    m.guidance.navConstant = 3.0;
+    m.guidance.maxLateralG = 5.0;
+    m.guidance.activationDelay = 5.0;
+
+    const w = new Weapon();
+    w.name = 'PrSM (clase)';
+    w.category = 'Missile';
+    w.minElevationDeg = 30.0;
+    w.maxElevationDeg = 80.0;
+    w.traverseDeg = 360.0;
+    w.reloadTime = 25.0;
+    w.round = m;
+    w.charges = [];
+    return w;
+  }
+
   static get(id: WeaponId, variant: CatalogVariant = 'bc'): Weapon {
     switch (id) {
       case 'mortar120': return WeaponCatalog.mortar120(variant);
       case 'm777': return WeaponCatalog.m777(variant);
+      case 'm109': return WeaponCatalog.m109Paladin();
+      case 'pion2s7': return WeaponCatalog.pion2S7();
+      case 'excalibur': return WeaponCatalog.excalibur();
       case 'gmlrs': return WeaponCatalog.himarsGMLRS(variant);
+      case 'm26': return WeaponCatalog.m26MLRS();
+      case 'ergmlrs': return WeaponCatalog.erGMLRS();
       case 'tacticalMissile': return WeaponCatalog.tacticalMissile(variant);
+      case 'prsm': return WeaponCatalog.prsm();
     }
   }
 
   static all(variant: CatalogVariant = 'bc'): Weapon[] {
-    return [
-      WeaponCatalog.mortar120(variant),
-      WeaponCatalog.m777(variant),
-      WeaponCatalog.himarsGMLRS(variant),
-      WeaponCatalog.tacticalMissile(variant),
-    ];
+    return WeaponCatalog.ids().map((id) => WeaponCatalog.get(id, variant));
   }
 
   static ids(): WeaponId[] {
-    return ['mortar120', 'm777', 'gmlrs', 'tacticalMissile'];
+    return [
+      'mortar120', 'm777', 'm109', 'pion2s7', 'excalibur',
+      'gmlrs', 'm26', 'ergmlrs', 'tacticalMissile', 'prsm',
+    ];
   }
 }

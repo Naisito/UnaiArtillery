@@ -54,6 +54,23 @@ canvas.three-overlay {
 
 #controlPanel { top: 16px; left: 16px; width: 300px; }
 #weatherPanel { top: 16px; right: 16px; width: 260px; }
+
+/* --- Cockpit de puntería (P-NEXT.1) -------------------------------------- */
+#cockpit {
+  left: 16px;
+  bottom: 16px;
+  padding: 10px 12px 12px;
+}
+#cockpit .instruments {
+  display: flex;
+  gap: 10px;
+}
+#cockpit canvas {
+  display: block;
+  cursor: crosshair;
+  touch-action: none; /* el arrastre apunta, no hace scroll */
+  border-radius: 8px;
+}
 #hud {
   left: 50%;
   bottom: 16px;

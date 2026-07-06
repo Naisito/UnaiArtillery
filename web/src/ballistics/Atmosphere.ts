@@ -1,13 +1,29 @@
 // ============================================================================
-//  Atmosphere.ts — International Standard Atmosphere (ISA) + wind field.
+//  Atmosphere.ts — Standard atmosphere + wind field.
 //
-//  1:1 port of core/Atmosphere.h, plus (P1.7) an altitude wind PROFILE:
-//  a list of {altitude -> (speed, from-bearing)} points interpolated linearly
-//  in speed and along the shortest arc in bearing, loadable from a simple CSV.
+//  P-NEXT.2: the default model is now the full **US Standard Atmosphere 1976**
+//  up to 86 km geometric altitude (7 layers defined in geopotential height,
+//  H = r0·Z/(r0+Z) with r0 = 6356766 m), plus a smooth isothermal exponential
+//  tail above. This matters because the tactical missile spends half its
+//  flight at 30-80 km, where the old 2-layer extrapolation was badly wrong
+//  (2.5x too thin at 70 km).
 //
-//  ISA reference (troposphere 0..11 km, then isothermal 11..20 km):
+//  The original 2-layer model (troposphere + 11-20 km isothermal extrapolated
+//  upward) is the exact model the validated C++ core uses; it stays available
+//  as `model: 'isa2'` / `Atmosphere.legacyTwoLayer()` and the C++ parity
+//  tests (validation.test.ts) run against it. Catalog and app use the ISA-76.
+//
+//  The sea-level knobs `seaLevelTemperatureK/PressurePa` shift the whole
+//  column in both models: every layer base temperature moves by ΔT and the
+//  pressure ladder is rebuilt from the actual P0.
+//
+//  Plus (P1.7) an altitude wind PROFILE: a list of
+//  {altitude -> (speed, from-bearing)} points interpolated linearly in speed
+//  and along the shortest arc in bearing, loadable from a simple CSV.
+//
+//  ISA sea-level reference:
 //      T0 = 288.15 K,  P0 = 101325 Pa,  rho0 = 1.225 kg/m^3
-//      L  = 0.0065 K/m,  g0 = 9.80665 m/s^2,  R = 287.05287 J/(kg*K)
+//      g0 = 9.80665 m/s^2,  R = 287.05287 J/(kg*K)
 // ============================================================================
 import { Vec3 } from './Vec3';
 
@@ -27,7 +43,35 @@ export interface WindProfilePoint {
 
 export type WindField = (pos: Vec3, t: number) => Vec3;
 
+export type AtmosphereModel = 'isa76' | 'isa2';
+
+const G0 = 9.80665;
+const R_AIR = 287.05287;
+const GAMMA = 1.4;
+
+/** Effective Earth radius for the geometric->geopotential conversion (m). */
+const R_EARTH_GP = 6356766.0;
+
+/** USSA-76 layer bases in geopotential meters and their lapse rates (K/m). */
+const ISA76_LAYERS: { hB: number; L: number }[] = [
+  { hB: 0.0,     L: -6.5e-3 },  // troposphere
+  { hB: 11000.0, L: 0.0 },      // tropopause (isothermal)
+  { hB: 20000.0, L: +1.0e-3 },  // lower stratosphere
+  { hB: 32000.0, L: +2.8e-3 },  // upper stratosphere
+  { hB: 47000.0, L: 0.0 },      // stratopause (isothermal)
+  { hB: 51000.0, L: -2.8e-3 },  // lower mesosphere
+  { hB: 71000.0, L: -2.0e-3 },  // upper mesosphere
+];
+
+/** Geopotential top of the tabulated model: 84.852 km H = 86 km geometric. */
+const ISA76_TOP = 84852.0;
+
+interface LayerBase { hB: number; T: number; P: number; L: number; }
+
 export class Atmosphere {
+  /** 'isa76' (default, full 86 km) or 'isa2' (C++ parity, 2 layers). */
+  model: AtmosphereModel = 'isa76';
+
   // Weather knobs, expressed relative to the ISA baseline.
   seaLevelTemperatureK = 288.15;
   seaLevelPressurePa = 101325.0;
@@ -35,30 +79,99 @@ export class Atmosphere {
   // Wind is a full vector field over (position, time). Default: calm.
   windField: WindField = () => new Vec3(0, 0, 0);
 
+  // Pressure/temperature ladder of the ISA-76 layer bases, rebuilt lazily
+  // when the sea-level knobs change (the solver samples every RK4 substep).
+  private layerCache: { T0: number; P0: number; bases: LayerBase[]; topT: number; topP: number } | null = null;
+
+  /** The exact 2-layer model of the validated C++ core (parity tests). */
+  static legacyTwoLayer(): Atmosphere {
+    const a = new Atmosphere();
+    a.model = 'isa2';
+    return a;
+  }
+
   /** Sample the standard atmosphere at geometric altitude h (meters MSL). */
   sample(h: number): AtmoSample {
-    const g0 = 9.80665;
-    const R = 287.05287;
-    const L = 0.0065;
-    const gamma = 1.4;
+    return this.model === 'isa2' ? this.sampleTwoLayer(h) : this.sampleISA76(h);
+  }
 
+  // -- US Standard Atmosphere 1976 (default) ---------------------------------
+  private sampleISA76(hGeometric: number): AtmoSample {
+    // The standard defines its layers in geopotential height.
+    const z = Math.max(hGeometric, -5000.0);
+    const h = (R_EARTH_GP * z) / (R_EARTH_GP + z);
+    const { bases, topT, topP } = this.isa76Bases();
+
+    let T: number, P: number;
+    if (h <= ISA76_TOP) {
+      let i = bases.length - 1;
+      while (i > 0 && h < bases[i].hB) i--;
+      const b = bases[i];
+      if (b.L === 0.0) {
+        T = b.T;
+        P = b.P * Math.exp((-G0 * (h - b.hB)) / (R_AIR * T));
+      } else {
+        T = b.T + b.L * (h - b.hB);
+        P = b.P * Math.pow(T / b.T, -G0 / (R_AIR * b.L));
+      }
+    } else {
+      // Smooth isothermal exponential tail above 86 km geometric.
+      T = topT;
+      P = topP * Math.exp((-G0 * (h - ISA76_TOP)) / (R_AIR * T));
+    }
+    T = Math.max(T, 150.0); // numerical floor
+    const rho = P / (R_AIR * T);
+    const a = Math.sqrt(GAMMA * R_AIR * T);
+    return { density: rho, temperature: T, pressure: P, soundSpeed: a };
+  }
+
+  private isa76Bases(): { bases: LayerBase[]; topT: number; topP: number } {
+    const T0 = this.seaLevelTemperatureK;
+    const P0 = this.seaLevelPressurePa;
+    const c = this.layerCache;
+    if (c && c.T0 === T0 && c.P0 === P0) return c;
+
+    // ΔT shifts every layer base; the pressure ladder rebuilds from P0.
+    const bases: LayerBase[] = [];
+    let T = T0;
+    let P = P0;
+    for (let i = 0; i < ISA76_LAYERS.length; i++) {
+      const { hB, L } = ISA76_LAYERS[i];
+      bases.push({ hB, T, P, L });
+      const hNext = i + 1 < ISA76_LAYERS.length ? ISA76_LAYERS[i + 1].hB : ISA76_TOP;
+      const dh = hNext - hB;
+      if (L === 0.0) {
+        P = P * Math.exp((-G0 * dh) / (R_AIR * T));
+      } else {
+        const Tn = T + L * dh;
+        P = P * Math.pow(Tn / T, -G0 / (R_AIR * L));
+        T = Tn;
+      }
+    }
+    this.layerCache = { T0, P0, bases, topT: T, topP: P };
+    return this.layerCache;
+  }
+
+  // -- Legacy 2-layer ISA (C++ parity) ----------------------------------------
+  private sampleTwoLayer(h: number): AtmoSample {
+    const L = 0.0065;
     const T0 = this.seaLevelTemperatureK;
     const P0 = this.seaLevelPressurePa;
 
     let T: number, P: number;
     if (h <= 11000.0) {
       T = T0 - L * h;
-      P = P0 * Math.pow(T / T0, g0 / (R * L));
+      P = P0 * Math.pow(T / T0, G0 / (R_AIR * L));
     } else {
-      // Isothermal layer 11..20 km.
+      // Isothermal layer 11..20 km, extrapolated upward.
       const T11 = T0 - L * 11000.0;
-      const P11 = P0 * Math.pow(T11 / T0, g0 / (R * L));
+      const P11 = P0 * Math.pow(T11 / T0, G0 / (R_AIR * L));
       T = T11;
-      P = P11 * Math.exp((-g0 * (h - 11000.0)) / (R * T11));
+      P = P11 * Math.exp((-G0 * (h - 11000.0)) / (R_AIR * T11));
     }
     T = Math.max(T, 150.0); // numerical floor for very high shots
-    const rho = P / (R * T);
-    const a = Math.sqrt(gamma * R * T);
+    const rho = P / (R_AIR * T);
+    const a = Math.sqrt(GAMMA * R_AIR * T);
     return { density: rho, temperature: T, pressure: P, soundSpeed: a };
   }
 
@@ -79,6 +192,7 @@ export class Atmosphere {
   /** Shallow copy sharing nothing (windField reference is copied). */
   clone(): Atmosphere {
     const a = new Atmosphere();
+    a.model = this.model;
     a.seaLevelTemperatureK = this.seaLevelTemperatureK;
     a.seaLevelPressurePa = this.seaLevelPressurePa;
     a.windField = this.windField;

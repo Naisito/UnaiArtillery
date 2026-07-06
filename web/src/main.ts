@@ -7,16 +7,18 @@
 //  solo reproducen; cada frame actualiza presentadores, VFX y cámara.
 // ============================================================================
 import * as Cesium from 'cesium';
-import { createViewer } from './viewer';
+import { createViewer, GoogleTiles } from './viewer';
 import { BallisticsService } from './BallisticsService';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { maybeAttachBloom } from './render/PostFX';
 import { VfxManager } from './vfx/effects';
 import { AudioBoom } from './vfx/AudioBoom';
+import { CraterLayer } from './vfx/CraterLayer';
 import { TrajectoryPreview } from './TrajectoryPreview';
 import { CameraDirector } from './CameraDirector';
 import { ArtilleryPiece } from './ArtilleryPiece';
 import { ControlPanel } from './ui/ControlPanel';
+import { Cockpit } from './ui/Cockpit';
 import { WeatherPanel } from './ui/Weather';
 import { HUD } from './ui/HUD';
 import { toast } from './ui/toast';
@@ -33,12 +35,16 @@ async function boot(): Promise<void> {
   maybeAttachBloom(overlay);
   const vfx = new VfxManager(overlay.enuRoot, (pos) => service.atmo.windAt(pos, 0));
   const audio = new AudioBoom();
+  const craters = new CraterLayer(overlay.enuRoot); // P-NEXT.7
   const preview = new TrajectoryPreview(viewer, () => service.frame);
   const director = new CameraDirector(viewer, service);
   const hud = new HUD();
 
   let pickMode: PickMode = 'none';
   let piece: ArtilleryPiece;
+
+  // P-NEXT.3 — edificios 3D fotorrealistas (opcional, solo visual).
+  const googleTiles = new GoogleTiles(viewer, (msg) => toast(msg));
 
   const panel = new ControlPanel({
     onAimChanged: () => piece.schedulePreview(),
@@ -49,6 +55,11 @@ async function boot(): Promise<void> {
     onFire: () => void piece.fire(),
     onMRSI: (n) => void piece.fireMRSI(n),
     onCompare: () => void piece.compare(),
+    onDisperse: (n) => void piece.fireDispersedSalvo(n),
+    onClearCraters: () => {
+      craters.clear();
+      toast('Cráteres limpiados');
+    },
     onCameraMode: (mode) => {
       if (mode === 'follow') {
         if (!piece.followLatest()) {
@@ -56,8 +67,12 @@ async function boot(): Promise<void> {
           panel.markCamera(director.mode === 'follow' ? 'free' : director.mode);
           return;
         }
+        toast('Seguir: arrastra para orbitar · rueda para zoom');
       } else {
         director.setMode(mode);
+      }
+      if (mode === 'fps') {
+        toast('1ª persona: clic en el globo para capturar el ratón · WASD mover · Espacio/C subir/bajar · Shift esprintar · rueda velocidad · Esc suelta');
       }
       if (mode === 'orbital') director.setFocus(new Vec3(0, 0, 60));
       if (mode === 'free') flyToBattery(false);
@@ -70,11 +85,26 @@ async function boot(): Promise<void> {
       pickMode = active ? 'battery' : 'none';
       if (active) toast('Clic en el globo para desplegar la batería ahí');
     },
+    onGoogleTiles: (active) => {
+      void googleTiles.setEnabled(active).then((on) => panel.setGoogleTiles(on));
+    },
   });
 
-  piece = new ArtilleryPiece(service, overlay, vfx, audio, preview, director, panel, hud);
+  // Con clave de Google presente, los edificios entran encendidos de serie.
+  if (GoogleTiles.preferredOn()) {
+    void googleTiles.setEnabled(true).then((on) => panel.setGoogleTiles(on));
+  }
+
+  piece = new ArtilleryPiece(service, overlay, vfx, audio, preview, director, panel, hud, craters);
   const weather = new WeatherPanel(service);
   weather.onChange = () => piece.schedulePreview(250);
+
+  // P-NEXT.1 — cockpit de puntería fina + cámara de cabina.
+  const cockpit = new Cockpit(panel, () => piece.schedulePreview());
+  director.aimProvider = () => ({
+    azimuthDeg: panel.azimuthDeg,
+    elevationDeg: panel.elevationDeg,
+  });
 
   // -- Picking sobre el globo ------------------------------------------------
   const pickEcef = (windowPos: Cesium.Cartesian2): Cesium.Cartesian3 | undefined => {
@@ -145,6 +175,7 @@ async function boot(): Promise<void> {
     piece.update(dt);
     vfx.update(dt, overlay.cameraEnu());
     director.update(dt);
+    cockpit.render(); // solo repinta si la puntería cambió
   });
   viewer.scene.postRender.addEventListener(() => overlay.render());
 

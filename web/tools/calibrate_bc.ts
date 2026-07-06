@@ -1,11 +1,13 @@
 // ============================================================================
-//  calibrate_bc.ts — Calibración de coeficientes balísticos (P1.3 / P1.4).
+//  calibrate_bc.ts — Calibración de coeficientes balísticos (P1.3/P1.4/P-NEXT.4).
 //
 //  Busca por bisección el BC que hace que cada arma del catálogo BC reproduzca
-//  el alcance máximo del núcleo C++ validado (curvas explícitas). Ejecutar
-//  cuando se toquen las tablas G1/G7 o los parámetros del motor:
+//  su alcance máximo publicado (los 4 originales, contra el alcance del núcleo
+//  C++ validado). Corre sobre la atmósfera por defecto (ISA-76 desde P-NEXT.2).
+//  Ejecutar cuando se toquen las tablas G1/G7, la atmósfera o los motores:
 //
-//      npx tsx tools/calibrate_bc.ts
+//      npx tsx tools/calibrate_bc.ts            # todas
+//      npx tsx tools/calibrate_bc.ts --only prsm ergmlrs
 //
 //  Imprime el BC recomendado para pegar en WeaponCatalog.ts.
 // ============================================================================
@@ -15,10 +17,10 @@ import { Weapon, WeaponCatalog } from '../src/ballistics/WeaponCatalog';
 import { WeaponSystem } from '../src/ballistics/WeaponSystem';
 import { Vec3 } from '../src/ballistics/Vec3';
 
-function maxRange(w: Weapon, chargeIndex: number, spherical = false, maxFlight = 400): number {
+function maxRange(w: Weapon, chargeIndex: number, spherical = false, maxFlight = 400, dt = 0.005): number {
   const atmo = new Atmosphere();
   const cfg = SolverConfig.with({
-    dt: 0.005, enableCoriolis: true, latitudeDeg: 40.0,
+    dt, enableCoriolis: true, latitudeDeg: 40.0,
     sphericalEarth: spherical, maxFlight,
   });
   const fc = new WeaponSystem(atmo, cfg);
@@ -30,66 +32,62 @@ function maxRange(w: Weapon, chargeIndex: number, spherical = false, maxFlight =
   return best;
 }
 
+interface Entry {
+  key: string;
+  make: () => Weapon;
+  chargeIndex: number;
+  targetM: number;
+  bcLo: number;
+  bcHi: number;
+  spherical?: boolean;
+  maxFlight?: number;
+  dt?: number;
+}
+
+const ENTRIES: Entry[] = [
+  { key: 'mortar120', make: () => WeaponCatalog.mortar120(), chargeIndex: 3, targetM: 6367.3, bcLo: 0.8, bcHi: 4.0 },
+  { key: 'm777', make: () => WeaponCatalog.m777(), chargeIndex: 3, targetM: 20803.1, bcLo: 2.0, bcHi: 8.0 },
+  { key: 'm109', make: () => WeaponCatalog.m109Paladin(), chargeIndex: 3, targetM: 24000, bcLo: 2.0, bcHi: 12.0 },
+  { key: 'pion2s7', make: () => WeaponCatalog.pion2S7(), chargeIndex: 2, targetM: 37500, bcLo: 2.0, bcHi: 12.0 },
+  { key: 'excalibur', make: () => WeaponCatalog.excalibur(), chargeIndex: -1, targetM: 40000, bcLo: 4.0, bcHi: 60.0 },
+  { key: 'gmlrs', make: () => WeaponCatalog.himarsGMLRS(), chargeIndex: -1, targetM: 68381, bcLo: 3.0, bcHi: 16.0 },
+  { key: 'm26', make: () => WeaponCatalog.m26MLRS(), chargeIndex: -1, targetM: 32000, bcLo: 1.0, bcHi: 12.0 },
+  {
+    key: 'ergmlrs', make: () => WeaponCatalog.erGMLRS(), chargeIndex: -1, targetM: 150000,
+    bcLo: 4.0, bcHi: 30.0, spherical: true, maxFlight: 700, dt: 0.01,
+  },
+  {
+    key: 'tacticalMissile', make: () => WeaponCatalog.tacticalMissile(), chargeIndex: -1, targetM: 300000,
+    bcLo: 2.0, bcHi: 14.0, spherical: true, maxFlight: 700, dt: 0.01,
+  },
+  {
+    key: 'prsm', make: () => WeaponCatalog.prsm(), chargeIndex: -1, targetM: 500000,
+    bcLo: 6.0, bcHi: 60.0, spherical: true, maxFlight: 900, dt: 0.01,
+  },
+];
+
 /** Bisect BC so maxRange(weapon(BC)) ~= target (range grows with BC). */
-function calibrate(
-  label: string,
-  make: (bc: number) => Weapon,
-  chargeIndex: number,
-  target: number,
-  bcLo: number,
-  bcHi: number,
-  spherical = false,
-  maxFlight = 400,
-): number {
-  let lo = bcLo, hi = bcHi;
+function calibrate(e: Entry): number {
+  let lo = e.bcLo, hi = e.bcHi;
   let bc = 0.5 * (lo + hi);
   for (let i = 0; i < 14; i++) {
     bc = 0.5 * (lo + hi);
-    const r = maxRange(make(bc), chargeIndex, spherical, maxFlight);
-    const err = (r - target) / target;
-    console.log(`  ${label}: BC=${bc.toFixed(3)} -> ${r.toFixed(0)} m (err ${(err * 100).toFixed(2)}%)`);
+    const w = e.make();
+    w.round.ballisticCoefficient = bc;
+    const r = maxRange(w, e.chargeIndex, e.spherical ?? false, e.maxFlight ?? 400, e.dt ?? 0.005);
+    const err = (r - e.targetM) / e.targetM;
+    console.log(`  ${e.key}: BC=${bc.toFixed(3)} -> ${r.toFixed(0)} m (err ${(err * 100).toFixed(2)}%)`);
     if (Math.abs(err) < 0.004) break;
-    if (r < target) lo = bc; else hi = bc;
+    if (r < e.targetM) lo = bc; else hi = bc;
   }
   return bc;
 }
 
-const ONLY_MISSILE = process.argv.includes('--missile');
+const onlyIdx = process.argv.indexOf('--only');
+const only = onlyIdx >= 0 ? process.argv.slice(onlyIdx + 1) : null;
 
-if (!ONLY_MISSILE) {
-const mortarBC = calibrate(
-  'mortar G1',
-  (bc) => { const w = WeaponCatalog.mortar120(); w.round.ballisticCoefficient = bc; return w; },
-  3, 6367.3, 0.8, 4.0,
-);
-console.log(`>> mortar120 G1 BC = ${mortarBC.toFixed(2)}\n`);
-
-const m777BC = calibrate(
-  'M777 G7',
-  (bc) => { const w = WeaponCatalog.m777(); w.round.ballisticCoefficient = bc; return w; },
-  3, 20803.1, 2.0, 8.0,
-);
-console.log(`>> m777 G7 BC = ${m777BC.toFixed(2)}\n`);
-
-const gmlrsBC = calibrate(
-  'GMLRS G7',
-  (bc) => { const w = WeaponCatalog.himarsGMLRS(); w.round.ballisticCoefficient = bc; return w; },
-  -1, 68381.0, 3.0, 16.0,
-);
-console.log(`>> gmlrs G7 BC = ${gmlrsBC.toFixed(2)}\n`);
-}
-
-// Misil táctico: objetivo ~300 km EN MODO ESFÉRICO (P1.4).
-const missileBC = calibrate(
-  'missile G7 (spherical)',
-  (bc) => { const w = WeaponCatalog.tacticalMissile(); w.round.ballisticCoefficient = bc; return w; },
-  -1, 300000.0, 2.0, 14.0, true, 700,
-);
-console.log(`>> tacticalMissile G7 BC = ${missileBC.toFixed(2)}\n`);
-{
-  const w = WeaponCatalog.tacticalMissile();
-  w.round.ballisticCoefficient = missileBC;
-  const rFlat = maxRange(w, -1, false, 700);
-  const rSph = maxRange(w, -1, true, 700);
-  console.log(`  check: flat=${(rFlat / 1000).toFixed(1)} km  sph=${(rSph / 1000).toFixed(1)} km`);
+for (const e of ENTRIES) {
+  if (only && !only.includes(e.key)) continue;
+  const bc = calibrate(e);
+  console.log(`>> ${e.key} BC = ${bc.toFixed(2)}\n`);
 }

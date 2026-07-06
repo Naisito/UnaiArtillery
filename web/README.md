@@ -25,16 +25,55 @@ clic en el globo (la dirección de tiro resuelve la elevación contra el relieve
 **Fuego** dispara; **Salva MRSI ×3** hace impactar varias rondas a la vez;
 **Comparar físicas** superpone vacío/arrastre/Coriolis/viento. El panel derecho
 controla viento (incluido un perfil con cizalladura de ejemplo), temperatura y
-presión. Cámaras: Libre / Orbital / Seguir (con bullet-time al impactar) / Dron.
-`?bloom=1` en la URL activa el UnrealBloomPass experimental.
+presión. El **cockpit** (abajo-izquierda) afina la puntería con la rueda del ratón
+sobre la rosa de azimut o el cuadrante de elevación: paso 0.5º, Shift 0.05º (fino),
+Ctrl 5º (grueso); arrastrar también apunta. Cámaras: Libre / Orbital / **Seguir**
+(persigue el proyectil con bullet-time al impactar; arrastra para orbitar a su
+alrededor y usa la rueda para el zoom) / Dron / **Cabina** (en la boca del arma,
+gira con la rueda: pulsa Fuego y ve salir el tiro) / **1ª persona** (clic captura
+el ratón; WASD mueve, Espacio/C sube/baja, Shift esprinta, la rueda ajusta la
+velocidad de vuelo, Esc suelta el ratón). `?bloom=1` en la URL activa el
+UnrealBloomPass experimental.
+
+### Edificios 3D fotorrealistas (Google Earth) — opcional
+
+Con una clave de **Google Maps Platform** en `.env` (`VITE_GOOGLE_MAPS_KEY`), el
+toggle **🏙 Edificios 3D** carga los *Photorealistic 3D Tiles* (los datos de
+Google Earth: ciudades y edificios reales). Cómo sacarla:
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → crea un proyecto.
+2. *APIs & Services* → habilita **Map Tiles API**.
+3. *Credentials* → *Create credentials* → *API key* y pégala en `.env`.
+
+La Map Tiles API tiene **cuota gratuita mensual** (miles de sesiones de render de
+tiles 3D al mes; consulta la [página de precios](https://developers.google.com/maps/documentation/tile/usage-and-billing)).
+Alternativa sin clave de Google: con token de ion, el toggle intenta el asset
+**2275207** (el mismo tileset servido por Cesium ion, si lo has añadido a tu
+cuenta). Clave inválida o cuota agotada → aviso y la app sigue como siempre.
+
+> Los edificios son **solo visuales**: la física sigue muestreando el
+> `terrainProvider` (el impacto se calcula contra el terreno, no contra los
+> tejados). La atribución de Google se muestra automáticamente en el pie del
+> globo (créditos del tileset); no la ocultes.
 
 ## Tests y herramientas
 
 ```bash
 npm test                              # suite completa (validación + fidelidad)
+npm run e2e                           # smoke E2E: build + Playwright (ver abajo)
 npm run firing-table -- m777 3 1000   # tabla de tiro CSV por stdout (P4.3)
 npx tsx tools/calibrate_bc.ts         # recalibra los BC del catálogo
 ```
+
+### Smoke E2E (Playwright, local)
+
+`npm run e2e` construye la app y lanza `e2e/smoke.spec.ts` con chromium headless
+contra `vite preview`: comprueba que el globo y el overlay arrancan, que el
+selector de armas está poblado, que el arco de preview se resuelve, que **Fuego**
+activa el HUD con el TOF avanzando, y falla ante cualquier error de consola no
+esperado (se ignoran los avisos de token de Cesium y teselas caprichosas). Corre
+sin token de ion (modo OSM). La primera vez: `npx playwright install chromium`.
+Sin workflow de CI a propósito: este proyecto no usa GitHub Actions.
 
 `validation.test.ts` replica el arnés C++ (`tests/validation.cpp`) con los MISMOS
 umbrales y añade la paridad numérica; `fidelity.test.ts` cubre G1/G7+BC, spin

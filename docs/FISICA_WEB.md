@@ -26,21 +26,55 @@ durante el quemado del motor cohete.
   `Cd(M) = i·Cd_ref(M)` con el factor de forma `i = SD/BC` y la densidad seccional
   `SD = masa_lb / d_in²`.
 - **Los BC del catálogo están calibrados contra este solver** para reproducir el
-  alcance máximo publicado de cada arma (`web/tools/calibrate_bc.ts`):
-  mortero G1 BC 1.65 · M107/M777 G7 BC 3.69 · GMLRS G7 BC 7.67 · misil G7 BC 11.56.
-  Los factores de forma resultantes quedan en 0.3–1.5 (test de plausibilidad).
+  alcance máximo publicado de cada arma (`web/tools/calibrate_bc.ts`, ISA-76).
+  Tabla vigente (P-NEXT.4):
+
+  | Arma | Modelo | BC (lb/in²) | Alcance calibrado |
+  |---|---|---|---|
+  | Mortero 120 mm | G1 | 1.65 | ~6.4 km |
+  | M777 (M107) | G7 | 3.69 | ~20.8 km |
+  | M109A7 Paladin (M107/L39) | G7 | 5.13 | ~24 km |
+  | 2S7 Pion 203 mm | G7 | 4.58 | ~37.5 km |
+  | M982 Excalibur | G7 | 25.0 | ~40 km |
+  | GMLRS M31 | G7 | 7.67 | ~68 km |
+  | M26 MLRS | G7 | 9.94 | ~32 km |
+  | ER GMLRS | G7 | 12.53 | ~150 km (esférico) |
+  | Misil táctico (ATACMS) | G7 | 11.56 | ~300 km (esférico) |
+  | PrSM (clase) | G7 | 14.02 | ~500 km (esférico) |
+
+  Los factores de forma quedan en 0.3–1.5 (test de plausibilidad) salvo el
+  Excalibur (i ≈ 0.11): su BC absorbe el planeo con canards, que el solver no
+  modela — es un ajuste de ingeniería consciente.
 - La curva explícita `Cd(Mach)` original sigue disponible (`dragModel:'explicit'` y
   variante `'legacy'` del catálogo), que es la configuración de paridad con C++.
 
-## Atmósfera y viento (P1.7)
+## Atmósfera (P-NEXT.2) y viento (P1.7)
 
-ISA de dos capas (troposfera con gradiente 6.5 K/km + capa isoterma 11-20 km) con
-temperatura y presión a nivel del mar ajustables. El viento es un campo
-`(posición, t) → vector`; además del viento constante con ganancia por altitud, se
-acepta un **perfil por altitud** `{altitud → (velocidad, rumbo)}` interpolado
-(velocidad lineal, rumbo por el arco más corto), cargable de CSV
-(`altitude_m,speed_ms,from_bearing_deg`). Ejemplo con cizalladura en
-`web/public/data/wind_shear_example.csv`.
+El modelo por defecto es la **US Standard Atmosphere 1976 completa hasta 86 km**
+geométricos: 7 capas definidas en altitud geopotencial `H = r₀·Z/(r₀+Z)`
+(r₀ = 6 356 766 m) — 0-11 km (−6.5 K/km), 11-20 (isoterma), 20-32 (+1.0),
+32-47 (+2.8), 47-51 (isoterma), 51-71 (−2.8), 71-84.85 (−2.0 K/km) — con la
+fórmula barométrica de gradiente o de capa isoterma según el caso, y una **cola
+exponencial isoterma** por encima. Verificada contra la tabla publicada
+(20/30/32/40/47/50/71/86 km, error <0.1%; test con banda ±2% en
+`fidelity.test.ts`). Los knobs `seaLevelTemperatureK/PressurePa` desplazan toda
+la columna: ΔT mueve la base de cada capa y la escalera de presiones se
+reconstruye desde el P0 real.
+
+El modelo antiguo de 2 capas (troposfera + isoterma 11-20 km extrapolada), que es
+el del núcleo C++ validado, sigue disponible como `model: 'isa2'` /
+`Atmosphere.legacyTwoLayer()` y es el que corren los tests de paridad
+(`validation.test.ts`). Por encima de ~20 km divergen (a 70 km el legacy era
+~2.5× demasiado tenue — relevante para el misil táctico, que pasa medio vuelo a
+30-80 km). La recalibración de BCs bajo ISA-76 (`tools/calibrate_bc.ts`) confirmó
+los valores existentes dentro de 0.3%: casi todo el arrastre ocurre por debajo de
+20 km, donde ambos modelos son idénticos.
+
+El viento es un campo `(posición, t) → vector`; además del viento constante con
+ganancia por altitud, se acepta un **perfil por altitud**
+`{altitud → (velocidad, rumbo)}` interpolado (velocidad lineal, rumbo por el arco
+más corto), cargable de CSV (`altitude_m,speed_ms,from_bearing_deg`). Ejemplo con
+cizalladura en `web/public/data/wind_shear_example.csv`.
 
 ## Coriolis
 

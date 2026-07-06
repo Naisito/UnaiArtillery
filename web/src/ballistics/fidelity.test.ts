@@ -38,6 +38,54 @@ function maxRange(w: Weapon, chargeIndex: number, spherical = false, maxFlight =
 }
 
 // ---------------------------------------------------------------------------
+describe('P-NEXT.2 — US Standard Atmosphere 1976 (86 km)', () => {
+  it('density matches the published USSA-76 table at 20/32/47/71 km (±2%)', () => {
+    // Geometric-altitude table values (the layers are defined in geopotential
+    // height; the backlog quoted 1.43e-3 / 6.42e-5 for 47/71 km, which are the
+    // geopotential-table entries — these are their geometric equivalents).
+    const published: [number, number][] = [
+      [20000, 8.891e-2],
+      [32000, 1.3555e-2],
+      [47000, 1.4973e-3],
+      [71000, 7.1963e-5],
+    ];
+    const atmo = new Atmosphere();
+    for (const [z, rho] of published) {
+      expect(Math.abs(atmo.densityAt(z) - rho) / rho).toBeLessThan(0.02);
+    }
+  });
+
+  it('extra published anchors: 30/40/50/86 km and the exponential tail', () => {
+    const atmo = new Atmosphere();
+    expect(Math.abs(atmo.densityAt(30000) - 1.841e-2) / 1.841e-2).toBeLessThan(0.02);
+    expect(Math.abs(atmo.densityAt(40000) - 3.996e-3) / 3.996e-3).toBeLessThan(0.02);
+    expect(Math.abs(atmo.densityAt(50000) - 1.0269e-3) / 1.0269e-3).toBeLessThan(0.02);
+    expect(Math.abs(atmo.densityAt(86000) - 6.958e-6) / 6.958e-6).toBeLessThan(0.02);
+    // Above the tabulated top the tail keeps decaying smoothly.
+    const r90 = atmo.densityAt(90000);
+    const r100 = atmo.densityAt(100000);
+    expect(r90).toBeLessThan(atmo.densityAt(86000));
+    expect(r100).toBeLessThan(r90);
+    expect(r100).toBeGreaterThan(0);
+  });
+
+  it('sea-level knobs shift the whole column; legacy 2-layer stays available', () => {
+    const hot = new Atmosphere();
+    hot.seaLevelTemperatureK = 288.15 + 15;
+    expect(hot.sample(0).temperature).toBeCloseTo(303.15, 6);
+    expect(hot.sample(30000).temperature).toBeGreaterThan(new Atmosphere().sample(30000).temperature);
+    expect(hot.densityAt(0)).toBeLessThan(1.225); // hot air is thinner
+
+    // Below 20 km both models agree (same physics)...
+    const isa76 = new Atmosphere();
+    const isa2 = Atmosphere.legacyTwoLayer();
+    expect(Math.abs(isa2.densityAt(10000) - isa76.densityAt(10000)) / isa2.densityAt(10000)).toBeLessThan(0.01);
+    // ...above it the legacy extrapolation is far too thin (that was the bug).
+    expect(isa2.densityAt(70000)).toBeLessThan(isa76.densityAt(70000) * 0.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('P1.3 — G1/G7 drag + ballistic coefficient', () => {
   it('BC-defined mortar stays in the published 5.5-9 km band', () => {
     const w = WeaponCatalog.mortar120();
@@ -69,6 +117,98 @@ describe('P1.3 — G1/G7 drag + ballistic coefficient', () => {
       expect(i).toBeGreaterThan(0.3);
       expect(i).toBeLessThan(1.5);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('P-NEXT.4 — arsenal ampliado (banda ±20% del alcance publicado)', () => {
+  const inBand = (r: number, publishedM: number) => {
+    expect(r).toBeGreaterThan(publishedM * 0.8);
+    expect(r).toBeLessThan(publishedM * 1.2);
+  };
+
+  it('M109A7 Paladin ~24 km', () => {
+    const w = WeaponCatalog.m109Paladin();
+    inBand(maxRange(w, w.charges.length - 1), 24000);
+  });
+
+  it('2S7 Pion ~37.5 km', () => {
+    const w = WeaponCatalog.pion2S7();
+    inBand(maxRange(w, w.charges.length - 1), 37500);
+  });
+
+  it('M982 Excalibur ~40 km', () => {
+    const w = WeaponCatalog.excalibur();
+    inBand(maxRange(w, -1), 40000);
+  });
+
+  it('M26 MLRS ~32 km', () => {
+    const w = WeaponCatalog.m26MLRS();
+    inBand(maxRange(w, -1), 32000);
+  });
+
+  it('ER GMLRS ~150 km (esférico)', () => {
+    const w = WeaponCatalog.erGMLRS();
+    inBand(maxRange(w, -1, true, 700, 0.02), 150000);
+  });
+
+  it('PrSM ~500 km y apogeo coherente (esférico)', () => {
+    const w = WeaponCatalog.prsm();
+    inBand(maxRange(w, -1, true, 900, 0.02), 500000);
+
+    // Un tiro concreto al QE óptimo (~62º con esta fase de empuje, como el
+    // misil táctico): ~500 km con apogeo ~140 km — alcance Y apogeo coherentes.
+    const atmo = new Atmosphere();
+    const cfg = SolverConfig.with({
+      dt: 0.02, maxFlight: 900, enableCoriolis: true, latitudeDeg: 40.0, sphericalEarth: true,
+    });
+    const solver = new BallisticsSolver(atmo, cfg);
+    const v = WeaponSystem.launchVelocity(90.0, 62.0, w.round.muzzleVelocity);
+    const fr = solver.integrate(w.round, new Vec3(), v);
+    expect(fr.impacted).toBe(true);
+    expect(fr.downrange).toBeGreaterThan(450_000);
+    expect(fr.apex).toBeGreaterThan(100_000);
+    expect(fr.apex).toBeLessThan(200_000);
+  });
+
+  it('Excalibur clava <5 m un objetivo marcado que el tiro balístico falla', () => {
+    const atmo = new Atmosphere();
+    const cfg = SolverConfig.with({ dt: 0.005, enableCoriolis: true, latitudeDeg: 40.0 });
+    const fc = new WeaponSystem(atmo, cfg);
+    const w = WeaponCatalog.excalibur();
+    expect(w.round.guidance.enabled).toBe(true);
+
+    const sol = fc.solveForRange(w, new Vec3(), 30000.0, 90.0, -1, false);
+    expect(sol.found).toBe(true);
+    const order = { azimuthDeg: 90.0, elevationDeg: sol.elevationDeg, chargeIndex: -1 };
+    const target = new Vec3(30000.0, 150.0, 0.0); // error de puntería lateral
+
+    const ballistic = fc.fire(w, new Vec3(), order);
+    const guided = fc.fire(w, new Vec3(), order, target);
+    const missOf = (p: Vec3) => new Vec3(p.x - target.x, p.y - target.y, 0).length();
+    expect(missOf(ballistic.impactPoint)).toBeGreaterThan(50);
+    expect(missOf(guided.impactPoint)).toBeLessThan(5);
+  });
+
+  it('M26: salva de 6 dispersa (semilla fija) — nube visible y reproducible', () => {
+    const atmo = new Atmosphere();
+    const cfg = SolverConfig.with({ dt: 0.01 });
+    const fc = new WeaponSystem(atmo, cfg);
+    const w = WeaponCatalog.m26MLRS();
+    expect(w.round.guidance.enabled).toBe(false); // NO guiado: cohete de área
+
+    const sol = fc.solveForRange(w, new Vec3(), 25000.0, 0.0, -1, false);
+    expect(sol.found).toBe(true);
+    const order = { azimuthDeg: 0.0, elevationDeg: sol.elevationDeg, chargeIndex: -1 };
+    const errors = {
+      muzzleVelocityStd: 0.003 * 35, azimuthStdMils: 2.0, elevationStdMils: 3.0, windStd: 1.5,
+    };
+    const a = fc.fireDispersed(w, new Vec3(), order, 6, errors, 42);
+    const b = fc.fireDispersed(w, new Vec3(), order, 6, errors, 42);
+    expect(a.impacts).toHaveLength(6);
+    expect(b.cep).toBe(a.cep); // determinista
+    expect(a.cep).toBeGreaterThan(15);  // elipse visible sobre el terreno
+    expect(a.cep).toBeLessThan(800);    // pero creíble para un MLRS
   });
 });
 
