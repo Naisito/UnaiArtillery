@@ -1,5 +1,5 @@
 // ============================================================================
-//  smoke.spec.ts — E2E de humo (P-NEXT.6).
+//  smoke.spec.ts — E2E de humo (P-NEXT.6, arnés común en utils.ts).
 //
 //  Vitest blinda la física; esto verifica que la APP ARRANCA: globo Cesium +
 //  overlay Three vivos, panel con arsenal, el arco de preview llega a
@@ -9,40 +9,19 @@
 //  (modo OSM) o con él, indistintamente.
 // ============================================================================
 import { expect, test } from '@playwright/test';
-
-// Ruido benigno que NO debe tumbar el smoke: avisos del token/assets de
-// Cesium ion y teselas de imaginería que fallen esporádicamente.
-const IGNORED = [
-  /cesium ion/i,
-  /ion\.cesium\.com/i,
-  /api\.cesium\.com/i,
-  /Failed to load resource/i, // teselas OSM/ion caprichosas; los fallos reales llegan por pageerror
-];
+import { bootApp, collectErrors, waitForPreview } from './utils';
 
 test('smoke: arranca, previsualiza y dispara sin errores de consola', async ({ page }) => {
-  const errors: string[] = [];
-  page.on('console', (msg) => {
-    if (msg.type() !== 'error') return;
-    const text = msg.text();
-    if (IGNORED.some((re) => re.test(text))) return;
-    errors.push(text);
-  });
-  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+  const errors = collectErrors(page);
 
-  await page.goto('/');
+  await bootApp(page);
 
-  // (2) El globo Cesium y el overlay Three existen.
-  await expect(page.locator('#cesiumContainer canvas').first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator('canvas.three-overlay')).toHaveCount(1);
-
-  // (3) Selector de armas con 4+ opciones y arco de preview resuelto.
+  // Selector de armas con 4+ opciones y arco de preview resuelto.
   const weaponOptions = page.locator('#controlPanel select').first().locator('option');
   expect(await weaponOptions.count()).toBeGreaterThanOrEqual(4);
-  const readout = page.locator('#controlPanel .readout');
-  await expect(readout).toContainText('→', { timeout: 60_000 });
-  await expect(readout).toContainText('km');
+  await waitForPreview(page);
 
-  // (4) Fuego: el HUD se activa y el TOF avanza.
+  // Fuego: el HUD se activa y el TOF avanza.
   await page.getByRole('button', { name: 'Fuego', exact: true }).click();
   const hud = page.locator('#hud.active');
   await expect(hud).toBeVisible({ timeout: 60_000 });
@@ -55,6 +34,6 @@ test('smoke: arranca, previsualiza y dispara sin errores de consola', async ({ p
     })
     .toBeGreaterThan(t1);
 
-  // (5) Ningún error de consola inesperado en todo el recorrido.
+  // Ningún error de consola inesperado en todo el recorrido.
   expect(errors).toEqual([]);
 });

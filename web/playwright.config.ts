@@ -10,6 +10,9 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: 'http://localhost:4173',
+    // Pantalla de escritorio real: a 720p el cockpit (abajo-izquierda) se
+    // solaparía con el final del panel de control e interceptaría clics.
+    viewport: { width: 1280, height: 960 },
     // WebGL por software en chromium headless (Cesium lo necesita).
     launchOptions: {
       args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],

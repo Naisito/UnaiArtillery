@@ -1,28 +1,43 @@
-# Backlog de mejoras — prompts listos para Fable (3ª ola)
+# Backlog de mejoras — prompts listos para Fable (3ª ola: COMPLETADA)
 
-Las dos primeras olas están completadas: la 1ª (2026-07-05) hizo el pivote web
+Las tres olas están completadas: la 1ª (2026-07-05) hizo el pivote web
 (CesiumJS + Three.js, núcleo C++ portado a TS validado) y la fidelidad P1; la 2ª
 (2026-07-06, P-NEXT.1–7) añadió atmósfera ISA-76 hasta 86 km, solves en Web
 Worker, arsenal de 10 armas calibradas, cockpit de puntería + cámara de cabina,
 Google Photorealistic 3D Tiles opcional, cráteres persistentes con salva
-dispersa, y el smoke E2E de Playwright — 55 tests de Vitest en verde + `npm run
-e2e`. Extra post-ola: cámara 1ª persona (WASD + pointer lock) y Seguir orbitable.
+dispersa, y el smoke E2E de Playwright (extra post-ola: cámara 1ª persona y
+Seguir orbitable); la 3ª (2026-07-06, P-PRO.1–9, en el orden recomendado
+3→4→1→5→6→2→7→8→9) añadió la banda 2D del corredor de terreno, base bleed +
+RAP con munición seleccionable, el cañón 3D procedural que apunta en vivo (con
+retroceso y boca real), la tabla de tiro interactiva con CSV, la elipse de
+error predicha validada contra Monte-Carlo (±30%), la meteo real de Open-Meteo
+(perfil por niveles de presión + reducción barométrica), el reto de puntería
+puntuado con récords en localStorage, los cráteres instanciados (2 draw calls)
++ pool de sprites (cap 600) con overlay `?stats=1`, y el E2E ampliado a 4
+specs — **76 tests de Vitest en verde + `npm run e2e` (4 specs)**.
 
-Este es el backlog vigente. Cada entrada es un **prompt autónomo**: pégalo tal
-cual en una sesión nueva de Fable dentro de este repo y lo ejecuta, ampliando la
-suite de Vitest (y ahora también la de Playwright) como criterio de aceptación.
+Las entradas de abajo quedan como registro. Cada una era un **prompt
+autónomo**: pégalo tal cual en una sesión nueva de Fable dentro de este repo y
+lo ejecuta, ampliando la suite de Vitest (y la de Playwright) como criterio de
+aceptación.
 
 Convención: **Objetivo** · **Prompt para Fable** · **Archivos** · **Aceptación**.
 
-> Orden recomendado: **P-PRO.3 → P-PRO.4 → P-PRO.1 → P-PRO.5 → P-PRO.6 →
-> P-PRO.2 → P-PRO.7 → P-PRO.8 → P-PRO.9** (el terreno 2D corrige la física de
-> todo lo que se aparta del rumbo, antes de apilar nada encima; base-bleed/RAP
-> tocan solver y catálogo, mejor pronto; el cañón 3D es independiente y el mayor
-> salto visual; la tabla de tiro y la elipse PER son la capa didáctica de
-> dirección de tiro; la meteo real es independiente; el reto usa todo lo
-> anterior; el rendimiento se optimiza cuando ya existe la carga que lo estresa;
-> el E2E se amplía al final y blinda todo). Para hacerlas todas de una vez:
-> *"Haz P-PRO.1 a P-PRO.9 de docs/MEJORAS_PROMPTS.md en el orden recomendado"*.
+> Orden recomendado (el que se siguió): **P-PRO.3 → P-PRO.4 → P-PRO.1 →
+> P-PRO.5 → P-PRO.6 → P-PRO.2 → P-PRO.7 → P-PRO.8 → P-PRO.9** (el terreno 2D
+> corrige la física de todo lo que se aparta del rumbo, antes de apilar nada
+> encima; base-bleed/RAP tocan solver y catálogo, mejor pronto; el cañón 3D es
+> independiente y el mayor salto visual; la tabla de tiro y la elipse PER son
+> la capa didáctica de dirección de tiro; la meteo real es independiente; el
+> reto usa todo lo anterior; el rendimiento se optimiza cuando ya existe la
+> carga que lo estresa; el E2E se amplía al final y blinda todo).
+>
+> Desviaciones conscientes respecto a los prompts: el `dragFactor` del base
+> bleed quedó en 0.5 (fit agregado documentado en FISICA_WEB.md — con 0.75 la
+> ganancia era 9%, fuera de la banda de aceptación 20–35%); el timeout del
+> spec de la salva subió a 240 s (con swiftshader los vuelos animan a ~0.2×);
+> y el perfil de viento de Open-Meteo se instala relativo a la batería (el
+> solver muestrea z ENU).
 
 ---
 

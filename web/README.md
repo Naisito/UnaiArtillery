@@ -75,15 +75,25 @@ npm run firing-table -- m777 3 1000   # tabla de tiro CSV por stdout (P4.3)
 npx tsx tools/calibrate_bc.ts         # recalibra los BC del catálogo
 ```
 
-### Smoke E2E (Playwright, local)
+### E2E (Playwright, local)
 
-`npm run e2e` construye la app y lanza `e2e/smoke.spec.ts` con chromium headless
-contra `vite preview`: comprueba que el globo y el overlay arrancan, que el
-selector de armas está poblado, que el arco de preview se resuelve, que **Fuego**
-activa el HUD con el TOF avanzando, y falla ante cualquier error de consola no
-esperado (se ignoran los avisos de token de Cesium y teselas caprichosas). Corre
-sin token de ion (modo OSM). La primera vez: `npx playwright install chromium`.
-Sin workflow de CI a propósito: este proyecto no usa GitHub Actions.
+`npm run e2e` construye la app y corre EN SERIE cuatro specs con chromium
+headless contra `vite preview` (arnés común en `e2e/utils.ts`); cualquier error
+de consola no esperado hace fallar el spec (se ignoran los avisos de token de
+Cesium y teselas caprichosas):
+
+- `smoke.spec.ts` — arranque: globo + overlay vivos, arsenal poblado, preview
+  resuelto y **Fuego** activa el HUD con el TOF avanzando.
+- `cockpit.spec.ts` — la rueda sobre la rosa de azimut mueve el rumbo ±0.5º
+  (±0.05º con Shift) y mover el slider de elevación repinta el cuadrante
+  (sincronía bidireccional panel ⇄ cockpit).
+- `salvo.spec.ts` — mortero a carga corta, **Salva dispersa ×6** hasta el toast
+  "Zona batida: CEP … m" y **Limpiar cráteres** (InstancedMesh de P-PRO.8).
+- `cameras.spec.ts` — todos los modos de cámara entran sin errores (1ª persona
+  sin forzar pointer lock: solo su toast) y **Libre** restaura el control.
+
+Corre sin token de ion (modo OSM). La primera vez: `npx playwright install
+chromium`. Sin workflow de CI a propósito: este proyecto no usa GitHub Actions.
 
 `validation.test.ts` replica el arnés C++ (`tests/validation.cpp`) con los MISMOS
 umbrales y añade la paridad numérica; `fidelity.test.ts` cubre G1/G7+BC, spin
