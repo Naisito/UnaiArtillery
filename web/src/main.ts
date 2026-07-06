@@ -22,10 +22,13 @@ import { ControlPanel } from './ui/ControlPanel';
 import { Challenge } from './ui/Challenge';
 import { Cockpit } from './ui/Cockpit';
 import { FiringTablePanel } from './ui/FiringTablePanel';
+import { GunnerHud } from './ui/GunnerHud';
 import { WeatherPanel } from './ui/Weather';
 import { HUD } from './ui/HUD';
 import { toast } from './ui/toast';
 import { Vec3 } from './ballistics';
+import type { FlightResult } from './ballistics';
+import type { RangeRing } from './BallisticsService';
 
 type PickMode = 'none' | 'target' | 'battery';
 
@@ -58,16 +61,19 @@ async function boot(): Promise<void> {
       piece.clearTarget();
       piece.schedulePreview(0);
       firingTable.notifyChanged();
+      refreshRing(); // el minimapa del artillero escala con el arma
       challenge.cancel(); // P-PRO.7 — arma nueva, reto viejo fuera
     },
     onRoundChanged: (index) => {
       service.roundIndex = index; // P-PRO.4 — el worker integra ESTA munición
       piece.schedulePreview(0);
       firingTable.notifyChanged();
+      refreshRing();
     },
     onChargeChanged: () => {
       piece.schedulePreview();
       firingTable.notifyChanged();
+      refreshRing();
     },
     onFire: () => void piece.fire(),
     onMRSI: (n) => void piece.fireMRSI(n),
@@ -130,6 +136,8 @@ async function boot(): Promise<void> {
     piece.clearTarget();
     piece.schedulePreview(0);
     firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
+    refreshRing();
+    gunnerHud.invalidateMap(); // teselas del minimapa de la posición nueva
     challenge.cancel(); // la diana era de la posición/cota anterior
   }
 
@@ -157,7 +165,43 @@ async function boot(): Promise<void> {
 
   // P-PRO.5 — tabla de tiro interactiva (arma/carga/meteo actuales).
   const firingTable = new FiringTablePanel(service, panel, () => piece.schedulePreview(0));
-  piece.onPreview = (fr) => firingTable.setPreviewRange(fr.downrange);
+
+  // HUD de artillero (modo Cabina): compás, goniómetro, retícula y minimapa
+  // de dron. Estado ligero alimentado por los hooks de preview/anillos.
+  let lastPreview: FlightResult | null = null;
+  let lastRing: RangeRing | null = null;
+  const refreshRing = () => {
+    void service
+      .approxMaxRange(panel.weaponId, panel.chargeIndex)
+      .then((r) => { lastRing = r; })
+      .catch(() => { lastRing = null; });
+  };
+  refreshRing();
+  const gunnerHud = new GunnerHud({
+    aim: () => {
+      const w = panel.weapon();
+      return {
+        azimuthDeg: panel.azimuthDeg,
+        elevationDeg: panel.elevationDeg,
+        minElevationDeg: w.minElevationDeg,
+        maxElevationDeg: w.maxElevationDeg,
+      };
+    },
+    weaponLabel: () => panel.weapon().name,
+    battery: () => ({ latDeg: service.frame.latDeg, lonDeg: service.frame.lonDeg }),
+    targetEnu: () => piece.targetEnu,
+    previewImpactEnu: () => lastPreview?.impactPoint ?? null,
+    solutionText: () =>
+      lastPreview
+        ? `→ ${(lastPreview.downrange / 1000).toFixed(2)} km · TOF ${lastPreview.timeOfFlight.toFixed(1)} s`
+        : '',
+    ring: () => lastRing,
+  });
+
+  piece.onPreview = (fr) => {
+    firingTable.setPreviewRange(fr.downrange);
+    lastPreview = fr;
+  };
 
   weather.onChange = () => {
     piece.schedulePreview(250);
@@ -173,7 +217,10 @@ async function boot(): Promise<void> {
     },
     schedulePreview: () => piece.schedulePreview(0),
   });
-  piece.onAnyImpact = (enu) => challenge.notifyImpact(enu);
+  piece.onAnyImpact = (enu) => {
+    challenge.notifyImpact(enu);
+    gunnerHud.addImpact(enu); // punto en el minimapa del artillero
+  };
 
   // P-NEXT.1 — cockpit de puntería fina + cámara de cabina.
   const cockpit = new Cockpit(panel, () => piece.schedulePreview());
@@ -258,6 +305,8 @@ async function boot(): Promise<void> {
     last = now;
     piece.update(dt);
     gun.update(dt, panel.azimuthDeg, panel.elevationDeg); // P-PRO.1 — apunta en vivo
+    gunnerHud.setVisible(director.mode === 'cabin');
+    gunnerHud.render(dt);
     vfx.update(dt, overlay.cameraEnu());
     director.update(dt);
     cockpit.render(); // solo repinta si la puntería cambió

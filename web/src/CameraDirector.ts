@@ -286,17 +286,23 @@ export class CameraDirector {
         break;
       }
       case 'cabin': {
-        // Justo detrás y encima de la boca REAL del tubo (P-PRO.1), mirando
-        // adonde apunta el cañón. OJO: se retrocede en el RUMBO HORIZONTAL,
-        // no a lo largo del tubo — a elevación alta eso hundiría la cámara.
+        // Vista de ARTILLERO (estilo videojuego): el ojo va detrás de la
+        // culata a altura de mira, y la mirada apunta casi al HORIZONTE por
+        // el rumbo actual — no a lo largo del tubo (a QE alta solo se veía
+        // cielo). El tubo del GunModel sube dentro del encuadre al elevar,
+        // como lo ve un tirador real tras el escudo. El HUD de artillero
+        // (GunnerHud) pinta compás, goniómetro y minimapa encima.
         const lay = this.aimProvider?.();
         if (!lay) return;
-        const dir = WeaponSystem.launchVelocity(lay.azimuthDeg, lay.elevationDeg, 1.0);
-        const muzzle = this.muzzleProvider?.() ?? this.service.muzzleEnu;
         const azRad = (lay.azimuthDeg * Math.PI) / 180.0;
-        const back = new Vec3(Math.sin(azRad), Math.cos(azRad), 0);
-        desired = muzzle.sub(back.mul(8.0)).add(new Vec3(0, 0, 2.0));
-        aim = muzzle.add(dir.mul(120.0));
+        const fwd = new Vec3(Math.sin(azRad), Math.cos(azRad), 0);
+        const eye = new Vec3(-fwd.x * 7.5, -fwd.y * 7.5, 3.4);
+        desired = eye;
+        // Cabeceo suave: 2º de base + fracción de la QE, tope 14º — el
+        // horizonte queda siempre en pantalla y el arco de salida se ve.
+        const lookPitchDeg = clamp(2.0 + lay.elevationDeg * 0.18, 2.0, 14.0);
+        const look = WeaponSystem.launchVelocity(lay.azimuthDeg, lookPitchDeg, 1.0);
+        aim = eye.add(look.mul(400.0));
         break;
       }
       default:
