@@ -10,6 +10,7 @@
 import { FireOrder, Vec3, WeaponSystem } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { CameraDirector } from './CameraDirector';
+import { GunModel } from './GunModel';
 import { ProjectilePresenter } from './ProjectilePresenter';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { TrajectoryPreview } from './TrajectoryPreview';
@@ -37,6 +38,8 @@ export class ArtilleryPiece {
     private readonly panel: ControlPanel,
     private readonly hud: HUD,
     private readonly craters: CraterLayer | null = null,
+    /** P-PRO.1 — modelo del arma: boca real + retroceso al disparar. */
+    private readonly gun: GunModel | null = null,
   ) {}
 
   order(): FireOrder {
@@ -248,6 +251,11 @@ export class ArtilleryPiece {
     const p = new ProjectilePresenter(
       this.service, this.overlay, this.vfx, this.audio, this.craters, weapon, flight, delay,
     );
+    // P-PRO.1 — fogonazo/humo desde la punta REAL del tubo + retroceso.
+    if (this.gun) {
+      p.muzzleProvider = () => this.gun!.muzzleWorldEnu();
+      p.onLaunch = () => this.gun!.fireRecoil();
+    }
     p.onImpact = (impactEnu) => {
       this.director.shakeFromImpact(impactEnu, warheadTNTeq); // P0.1+P0.2
       this.director.setFocus(impactEnu); // orbital/dron miran al cráter

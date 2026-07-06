@@ -16,6 +16,7 @@ import { AudioBoom } from './vfx/AudioBoom';
 import { CraterLayer } from './vfx/CraterLayer';
 import { TrajectoryPreview } from './TrajectoryPreview';
 import { CameraDirector } from './CameraDirector';
+import { GunModel } from './GunModel';
 import { ArtilleryPiece } from './ArtilleryPiece';
 import { ControlPanel } from './ui/ControlPanel';
 import { Cockpit } from './ui/Cockpit';
@@ -42,6 +43,7 @@ async function boot(): Promise<void> {
 
   let pickMode: PickMode = 'none';
   let piece: ArtilleryPiece;
+  let gun: GunModel;
 
   // P-NEXT.3 — edificios 3D fotorrealistas (opcional, solo visual).
   const googleTiles = new GoogleTiles(viewer, (msg) => toast(msg));
@@ -50,6 +52,7 @@ async function boot(): Promise<void> {
     onAimChanged: () => piece.schedulePreview(),
     onWeaponChanged: () => {
       service.roundIndex = 0; // P-PRO.4 — arma nueva, munición estándar
+      gun.setWeapon(panel.weapon()); // P-PRO.1 — nueva silueta (dispose limpio)
       piece.clearTarget();
       piece.schedulePreview(0);
     },
@@ -100,7 +103,11 @@ async function boot(): Promise<void> {
     void googleTiles.setEnabled(true).then((on) => panel.setGoogleTiles(on));
   }
 
-  piece = new ArtilleryPiece(service, overlay, vfx, audio, preview, director, panel, hud, craters);
+  // P-PRO.1 — la pieza por fin se VE: modelo procedural que apunta en vivo.
+  gun = new GunModel(overlay.enuRoot, panel.weapon());
+  piece = new ArtilleryPiece(
+    service, overlay, vfx, audio, preview, director, panel, hud, craters, gun,
+  );
   const weather = new WeatherPanel(service);
   weather.onChange = () => piece.schedulePreview(250);
 
@@ -110,6 +117,7 @@ async function boot(): Promise<void> {
     azimuthDeg: panel.azimuthDeg,
     elevationDeg: panel.elevationDeg,
   });
+  director.muzzleProvider = () => gun.muzzleWorldEnu(); // cabina pegada al tubo
 
   // -- Picking sobre el globo ------------------------------------------------
   const pickEcef = (windowPos: Cesium.Cartesian2): Cesium.Cartesian3 | undefined => {
@@ -178,6 +186,7 @@ async function boot(): Promise<void> {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     piece.update(dt);
+    gun.update(dt, panel.azimuthDeg, panel.elevationDeg); // P-PRO.1 — apunta en vivo
     vfx.update(dt, overlay.cameraEnu());
     director.update(dt);
     cockpit.render(); // solo repinta si la puntería cambió

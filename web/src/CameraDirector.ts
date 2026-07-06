@@ -40,6 +40,8 @@ export class CameraDirector {
   bulletTime = true;
   /** P-NEXT.1 — puntería actual para el modo cabina (lo fija main.ts). */
   aimProvider: (() => { azimuthDeg: number; elevationDeg: number }) | null = null;
+  /** P-PRO.1 — boca REAL del tubo (la cabina se monta pegada a ella). */
+  muzzleProvider: (() => Vec3) | null = null;
 
   private tracked: ProjectilePresenter | null = null;
   private focusEnu = new Vec3(0, 0, 0);
@@ -284,16 +286,16 @@ export class CameraDirector {
         break;
       }
       case 'cabin': {
-        // Justo detrás y encima de la boca, mirando adonde apunta el cañón.
-        // OJO: se retrocede en el RUMBO HORIZONTAL, no a lo largo del tubo —
-        // a elevación alta eso hundiría la cámara bajo el suelo.
+        // Justo detrás y encima de la boca REAL del tubo (P-PRO.1), mirando
+        // adonde apunta el cañón. OJO: se retrocede en el RUMBO HORIZONTAL,
+        // no a lo largo del tubo — a elevación alta eso hundiría la cámara.
         const lay = this.aimProvider?.();
         if (!lay) return;
         const dir = WeaponSystem.launchVelocity(lay.azimuthDeg, lay.elevationDeg, 1.0);
-        const muzzle = this.service.muzzleEnu;
+        const muzzle = this.muzzleProvider?.() ?? this.service.muzzleEnu;
         const azRad = (lay.azimuthDeg * Math.PI) / 180.0;
         const back = new Vec3(Math.sin(azRad), Math.cos(azRad), 0);
-        desired = muzzle.sub(back.mul(8.0)).add(new Vec3(0, 0, 2.5));
+        desired = muzzle.sub(back.mul(8.0)).add(new Vec3(0, 0, 2.0));
         aim = muzzle.add(dir.mul(120.0));
         break;
       }

@@ -33,6 +33,10 @@ export class ProjectilePresenter {
   /** 1 = tiempo real; el director de cámara lo baja para el bullet-time. */
   timeDilation = 1.0;
   onImpact?: (impactEnu: Vec3, yieldScale: number, impactSpeed: number) => void;
+  /** P-PRO.1 — boca REAL del arma (punta del tubo); fija fogonazo y humo ahí. */
+  muzzleProvider?: () => Vec3;
+  /** P-PRO.1 — se dispara al salir el tiro (retroceso visual del tubo). */
+  onLaunch?: () => void;
 
   readonly yieldScale: number;
 
@@ -47,6 +51,9 @@ export class ProjectilePresenter {
   private readonly trail: TrailFX;
   private readonly shock: ShockConeFX;
   private readonly flightDuration: number;
+  /** P-PRO.1 — boca real - inicio físico: el tiro SALE del tubo y se funde
+   *  con la trayectoria física en ~1 s (solo visual). */
+  private launchOffset = new Vec3(0, 0, 0);
 
   constructor(
     private readonly service: BallisticsService,
@@ -191,7 +198,12 @@ export class ProjectilePresenter {
     }
 
     const s = this.evaluate(this.elapsed);
-    this.mesh.position.set(s.pos.x, s.pos.y, s.pos.z);
+    const blend = Math.max(0, 1 - this.elapsed / 1.0); // funde boca -> física
+    this.mesh.position.set(
+      s.pos.x + this.launchOffset.x * blend,
+      s.pos.y + this.launchOffset.y * blend,
+      s.pos.z + this.launchOffset.z * blend,
+    );
     const speed = s.vel.length();
     if (speed > 1e-6) {
       const dir = new THREE.Vector3(s.vel.x / speed, s.vel.y / speed, s.vel.z / speed);
@@ -220,11 +232,17 @@ export class ProjectilePresenter {
   }
 
   private handleLaunch(): void {
-    const muzzle = this.service.muzzleEnu;
+    // P-PRO.1 — el fogonazo nace EXACTAMENTE en la punta del tubo del modelo.
+    const muzzle = this.muzzleProvider?.() ?? this.service.muzzleEnu;
+    if (this.flight.path.length) {
+      const p0 = this.flight.path[0].position;
+      this.launchOffset = new Vec3(muzzle.x - p0.x, muzzle.y - p0.y, muzzle.z - p0.z);
+    }
     const v0 = this.flight.path.length ? this.flight.path[0].velocity : new Vec3(0, 0, 1);
     const rho = this.service.atmo.densityAt(muzzle.z + this.service.frame.heightM);
     const scale = Math.max(0.6, Math.cbrt(this.weapon.round.diameter / 0.155));
     this.vfx.launchSignature(muzzle, v0, rho, scale);
+    this.onLaunch?.();
 
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
