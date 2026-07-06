@@ -26,6 +26,8 @@ export class ArtilleryPiece {
   targetEnu: Vec3 | null = null;
   /** P-PRO.5/6 — el preview vigente cambió (tabla de tiro, elipse PER…). */
   onPreview?: (fr: FlightResult) => void;
+  /** P-PRO.7 — cualquier impacto real (el reto puntúa el PRIMERO). */
+  onAnyImpact?: (impactEnu: Vec3) => void;
 
   private presenters: ProjectilePresenter[] = [];
   private previewToken = 0;
@@ -292,6 +294,7 @@ export class ArtilleryPiece {
     p.onImpact = (impactEnu) => {
       this.director.shakeFromImpact(impactEnu, warheadTNTeq); // P0.1+P0.2
       this.director.setFocus(impactEnu); // orbital/dron miran al cráter
+      this.onAnyImpact?.(impactEnu); // P-PRO.7 — el reto puntúa el primero
       onImpactExtra?.();
     };
     this.presenters.push(p);

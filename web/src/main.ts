@@ -19,6 +19,7 @@ import { CameraDirector } from './CameraDirector';
 import { GunModel } from './GunModel';
 import { ArtilleryPiece } from './ArtilleryPiece';
 import { ControlPanel } from './ui/ControlPanel';
+import { Challenge } from './ui/Challenge';
 import { Cockpit } from './ui/Cockpit';
 import { FiringTablePanel } from './ui/FiringTablePanel';
 import { WeatherPanel } from './ui/Weather';
@@ -57,6 +58,7 @@ async function boot(): Promise<void> {
       piece.clearTarget();
       piece.schedulePreview(0);
       firingTable.notifyChanged();
+      challenge.cancel(); // P-PRO.7 — arma nueva, reto viejo fuera
     },
     onRoundChanged: (index) => {
       service.roundIndex = index; // P-PRO.4 — el worker integra ESTA munición
@@ -126,6 +128,17 @@ async function boot(): Promise<void> {
     firingTable.notifyChanged();
   };
 
+  // P-PRO.7 — modo instrucción: reto de puntería puntuado.
+  const challenge = new Challenge(service, panel, {
+    marker: (enu) => preview.showChallengeTarget(enu),
+    lockPick: (locked) => {
+      if (locked) pickMode = 'none'; // por si 🎯 estaba armado
+      panel.setPickEnabled(!locked);
+    },
+    schedulePreview: () => piece.schedulePreview(0),
+  });
+  piece.onAnyImpact = (enu) => challenge.notifyImpact(enu);
+
   // P-NEXT.1 — cockpit de puntería fina + cámara de cabina.
   const cockpit = new Cockpit(panel, () => piece.schedulePreview());
   director.aimProvider = () => ({
@@ -172,6 +185,7 @@ async function boot(): Promise<void> {
         piece.schedulePreview(0);
         firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
         weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
+        challenge.cancel(); // P-PRO.7 — la diana era de la posición anterior
         flyToBattery(true);
         toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
       })();

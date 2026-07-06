@@ -341,6 +341,12 @@ export class ControlPanel {
   setStatus(text: string): void { this.statusEl.textContent = text; }
   setFiring(busy: boolean): void { this.fireBtn.disabled = busy; }
   setPickActive(active: boolean): void { this.pickBtn.classList.toggle('toggled', active); }
+
+  /** P-PRO.7 — el reto bloquea la solución automática (🎯). */
+  setPickEnabled(enabled: boolean): void {
+    this.pickBtn.disabled = !enabled;
+    if (!enabled) this.setPickActive(false);
+  }
   setBatteryActive(active: boolean): void { this.batteryBtn.classList.toggle('toggled', active); }
 
   markCamera(mode: CameraMode): void {

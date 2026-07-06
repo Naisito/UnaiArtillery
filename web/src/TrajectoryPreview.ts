@@ -18,6 +18,7 @@ export class TrajectoryPreview {
   private compare: Cesium.Entity[] = [];
   private targetMark?: Cesium.Entity;
   private errorEllipse: Cesium.Entity[] = [];
+  private challengeMark: Cesium.Entity[] = [];
 
   constructor(
     private readonly viewer: Cesium.Viewer,
@@ -193,6 +194,43 @@ export class TrajectoryPreview {
     this.errorEllipse.push(make(1, 0.85, true), make(2, 0.35, false));
   }
 
+  /**
+   * P-PRO.7 — diana del reto (distinta del objetivo normal): punto dorado y
+   * anillos con los umbrales de estrellas (25/75/150 m) para leer el fallo
+   * sobre el terreno. Con null se borra.
+   */
+  showChallengeTarget(targetEnu: Vec3 | null): void {
+    for (const e of this.challengeMark) this.viewer.entities.remove(e);
+    this.challengeMark = [];
+    if (!targetEnu) return;
+    const frame = this.frameOf();
+    const position = frame.enuToEcef(targetEnu);
+    const height = frame.heightM + targetEnu.z + 1;
+    const gold = Cesium.Color.fromCssColorString('#ffd54a');
+
+    this.challengeMark.push(
+      this.viewer.entities.add({
+        position,
+        point: {
+          pixelSize: 11, color: gold, outlineColor: Cesium.Color.BLACK, outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: this.label('🏅 reto'),
+      }),
+    );
+    for (const [radius, alpha] of [[25, 0.9], [75, 0.55], [150, 0.3]] as const) {
+      this.challengeMark.push(
+        this.viewer.entities.add({
+          position,
+          ellipse: {
+            semiMajorAxis: radius, semiMinorAxis: radius, height,
+            fill: false, outline: true, outlineColor: gold.withAlpha(alpha), outlineWidth: 2,
+          },
+        }),
+      );
+    }
+  }
+
   /** P4.2 — arcos superpuestos del modo comparación, con etiquetas. */
   showCompare(list: { label: string; cssColor: string; result: FlightResult }[]): void {
     this.clearCompare();
@@ -239,5 +277,6 @@ export class TrajectoryPreview {
     this.clearCompare();
     this.showTarget(null);
     this.showErrorEllipse(null);
+    this.showChallengeTarget(null);
   }
 }
