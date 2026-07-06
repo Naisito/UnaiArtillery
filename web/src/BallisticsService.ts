@@ -15,6 +15,7 @@
 //  Sin Worker disponible (p. ej. tests), cae a ejecutar en línea.
 // ============================================================================
 import * as Cesium from 'cesium';
+import { sampleDem } from './dem';
 import { GeoFrame } from './frame';
 import { Atmosphere, Vec3, Weapon, WeaponCatalog, WeaponId, WindProfilePoint } from './ballistics';
 import type {
@@ -248,29 +249,35 @@ export class BallisticsService {
     const az = (azimuthDeg * Math.PI) / 180.0;
     const dir = { e: Math.sin(az), n: Math.cos(az) };
     const right = { e: dir.n, n: -dir.e }; // t positivo a la derecha del rumbo
-    const cols = Math.max(2, Math.ceil((maxRangeM * 1.15) / stepM) + 1);
+    // Paso adaptativo: a 500 km no hacen falta muestras cada 400 m (y el DEM
+    // iría a ~9 peticiones en vez de ~70). Cota: ≤161 columnas por fila.
+    const step = Math.max(stepM, (maxRangeM * 1.15) / 160);
+    const cols = Math.max(2, Math.ceil((maxRangeM * 1.15) / step) + 1);
     const rows = halfWidthM > 0 ? 2 * Math.max(1, Math.round(halfWidthM / stepCrossM)) + 1 : 1;
     const halfW = ((rows - 1) / 2) * stepCrossM; // semiancho real de la malla
     const cartos: Cesium.Cartographic[] = [];
     for (let j = 0; j < rows; j++) {
       const t = -halfW + j * stepCrossM;
       for (let i = 0; i < cols; i++) {
-        const s = i * stepM;
+        const s = i * step;
         cartos.push(this.frame.cartographicOfEnu(
           new Vec3(dir.e * s + right.e * t, dir.n * s + right.n * t, 0),
         ));
       }
     }
     const heights = await this.sampleHeights(cartos);
-    const anchorH = this.frame.heightM;
+    // Perfil RELATIVO a la muestra de la propia batería (fila central, s=0):
+    // z ENU = 0 es el suelo del ancla. Inmune al dátum de la fuente (DEM MSL
+    // vs teselas/terreno elipsoidales) y alinea CWT con el ancla del tileset.
+    const ref = heights[((rows - 1) / 2) * cols];
     return {
       dirE: dir.e,
       dirN: dir.n,
-      stepAlongM: stepM,
+      stepAlongM: step,
       stepCrossM,
       halfWidthM: halfW,
       rows,
-      profile: heights.map((h) => h - anchorH), // alturas en z ENU, row-major
+      profile: heights.map((h) => h - ref), // alturas en z ENU, row-major
     };
   }
 
@@ -529,13 +536,22 @@ export class BallisticsService {
   // -- Terreno ---------------------------------------------------------------
   private async sampleHeights(cartos: Cesium.Cartographic[]): Promise<number[]> {
     const provider = this.viewer.terrainProvider;
-    // Sin terreno real (elipsoide, p.ej. sin token de ion) todo es altura 0 —
-    // salvo con teselas 3D activas: entonces el mejor suelo disponible es un
-    // plano a la cota del ancla (la batería SÍ está muestreada contra las
-    // teselas); a 0 m el corredor quedaría cientos de metros bajo la ciudad.
     if (provider instanceof Cesium.EllipsoidTerrainProvider) {
-      const h = this.tilesetGround?.show ? this.frame.heightM : 0;
-      return cartos.map(() => h);
+      // Modo plano (OSM): el suelo visual ES el elipsoide → 0 m, como siempre.
+      if (!this.tilesetGround?.show) return cartos.map(() => 0);
+      // Edificios 3D activos: el suelo visual de Google trae el relieve REAL
+      // horneado en las teselas — la física debe verlo o las parábolas acaban
+      // flotando sobre el valle / atravesando crestas. Se muestrea el DEM
+      // Copernicus GLO-90 (Open-Meteo, sin clave); da alturas MSL, pero el
+      // corredor usa el perfil RELATIVO a su primer punto y el dátum se
+      // cancela. Sin red: plano a la cota del ancla (el arreglo anterior).
+      const dem = await sampleDem(
+        cartos.map((c) => ({
+          latDeg: Cesium.Math.toDegrees(c.latitude),
+          lonDeg: Cesium.Math.toDegrees(c.longitude),
+        })),
+      );
+      return dem ?? cartos.map(() => this.frame.heightM);
     }
     try {
       const sampled = await Cesium.sampleTerrainMostDetailed(

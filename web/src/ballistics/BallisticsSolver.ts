@@ -179,6 +179,13 @@ export class BallisticsSolver {
 
     this.pushSample(out, ctx, s, t);
 
+    // Con TERRENO real, un tiro tenso puede comerse una ladera que sube más
+    // deprisa que él (máscara de cresta): el cruce cuenta también en fase
+    // ascendente. Sin terreno (plano analítico, la config de paridad C++) se
+    // mantiene la puerta descendente clásica: un tiro que nace exactamente
+    // sobre el plano del suelo no debe auto-impactar al salir.
+    const crestMask = cfg.terrainHeight !== undefined;
+
     const maxSteps = Math.floor(cfg.maxFlight / cfg.dt);
     for (let step = 0; step < maxSteps; step++) {
       const prev: State = { pos: s.pos, vel: s.vel, mass: s.mass };
@@ -192,13 +199,14 @@ export class BallisticsSolver {
       const alt = ops.altitude(s.pos);
       out.apex = Math.max(out.apex, alt);
 
-      // Ground / terrain intersection between prev and current. Only a
-      // *descending* crossing counts as an impact, so an ascending shot that
-      // starts exactly on the ground plane never false-triggers.
+      // Ground / terrain intersection between prev and current. With terrain,
+      // ANY above->below crossing is an impact (crest mask, see above); on the
+      // analytic plane only a *descending* crossing counts, so an ascending
+      // shot that starts exactly on the ground plane never false-triggers.
       const curGround = this.groundAt(ops, s.pos);
       const wasAbove = prevAlt - prevGround >= 0.0;
       const nowBelow = alt - curGround < 0.0;
-      if (wasAbove && nowBelow && ops.descending(s.pos, s.vel)) {
+      if (wasAbove && nowBelow && (crestMask || ops.descending(s.pos, s.vel))) {
         // Linear interpolation to the crossing for a clean impact point.
         const f0 = prevAlt - prevGround;
         const f1 = alt - curGround;

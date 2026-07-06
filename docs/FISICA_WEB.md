@@ -122,6 +122,44 @@ Nota de catálogo: el motor del misil del C++ original tenía velocidad de escap
 efectiva de 7000 m/s (nunca se validó); el catálogo BC usa Isp ≈ 265 s
 (`ΔV ≈ 2.1 km/s`) y queda calibrado a **300 km** de alcance máximo esférico.
 
+## Terreno del corredor de tiro (P-WEB.2 / P-PRO.3 / fix 3D)
+
+La integración es pura: el solver recibe un callback `(este, norte) → z` que
+interpola **bilinealmente una banda 2D** muestreada a lo largo del rumbo (paso
+adaptativo ≤161 columnas × 5 filas de ±1 km; mayor semiancho para salvas y
+guiados desplazados). La FUENTE de alturas es una cascada según lo que se ve:
+
+1. **Terreno real de ion (CWT)** — `sampleTerrainMostDetailed` (con o sin
+   edificios 3D: el relieve de Google coincide con CWT a pocos metros).
+2. **Edificios 3D sin ion** — el suelo visual de Google trae el relieve
+   horneado en las teselas; el corredor se muestrea contra el **DEM Copernicus
+   GLO-90** (Open-Meteo Elevation: gratis, sin clave, CORS, ≤100 puntos por
+   petición, caché por coordenada cuantizada a ~11 m). Sin red, degrada a
+   plano a la cota del ancla.
+3. **Modo plano (OSM/elipsoide)** — suelo a 0 m, como el suelo visual.
+
+Dos detalles que hacen esto consistente:
+
+- **Perfil relativo**: el perfil viaja como `h(s,t) − h(batería)`, referido a
+  la muestra de la PROPIA batería (fila central, s=0). Así el dátum de cada
+  fuente se cancela (el DEM da alturas MSL, las teselas y CWT elipsoidales;
+  la ondulación del geoide ~50 m en Iberia varía <1 m en 70 km) y el z=0 ENU
+  es siempre el suelo del ancla — que con edificios 3D se muestrea contra el
+  propio tileset (`sampleHeightMostDetailed`) para clavar lo visual.
+- **Máscara de cresta**: con terreno, el cruce por debajo del suelo cuenta
+  como impacto también en fase ASCENDENTE (un tiro tenso puede comerse una
+  ladera que sube más deprisa que él — *crest clearance*, la preocupación real
+  de toda dirección de tiro). Sin terreno (plano analítico, la configuración
+  de paridad C++) se mantiene la puerta descendente clásica, así que la
+  paridad no se mueve. Tests: cuesta abajo el arco se ALARGA y aterriza bajo
+  la cota de la batería; una cresta de 400 m detiene un tiro a QE 8º que sin
+  terreno vuela >8 km; con terreno plano a 0 el resultado es bit a bit el del
+  plano analítico.
+
+Limitación consciente: el DEM es *terreno desnudo* a 90 m — los edificios de
+Google siguen siendo visuales (un tiro rasante "atraviesa" un rascacielos, y
+el cráter se clava al suelo visual muestreado por punto de impacto).
+
 ## Base bleed y cohete auxiliar RAP (P-PRO.4)
 
 Dos mecanismos reales de alcance extendido, seleccionables como munición en los

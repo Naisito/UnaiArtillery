@@ -305,3 +305,67 @@ describe('P-PRO.3 — banda 2D del corredor', () => {
     expect(b.apex).toBe(a.apex);
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('Fix 3D — relieve real en el corredor (parábolas honestas)', () => {
+  const CFG = {
+    dt: 0.01, latitudeDeg: 40.75, anchorLonDeg: -3.9,
+    enableCoriolis: true, groundZ: 0, maxFlight: 700,
+  };
+  const fire = (terrain: TerrainSpec | undefined, elevationDeg: number): FlightResult =>
+    executeRequest(structuredClone({
+      id: 21, op: 'solveTrajectory' as const, weaponId: 'm777' as const,
+      order: { azimuthDeg: 90, elevationDeg, chargeIndex: 3 },
+      targetEnu: null, muzzle: { x: 0, y: 0, z: 3 },
+      atmo: { ...ATMO, wind: { kind: 'none' as const } },
+      cfg: CFG,
+      terrain,
+    })) as FlightResult;
+
+  it('cuesta abajo: el arco se ALARGA y el impacto cae bajo la cota de la batería', () => {
+    // Valle: el suelo baja 40 m por km hasta -800 m ENU (tipo monte->ría).
+    const downhill: TerrainSpec = {
+      dirE: 1, dirN: 0, stepAlongM: 400, rows: 1,
+      profile: Array.from({ length: 90 }, (_, i) => Math.max(-800, -40 * (i * 0.4))),
+    };
+    const flat: TerrainSpec = {
+      dirE: 1, dirN: 0, stepAlongM: 400, rows: 1,
+      profile: Array.from({ length: 90 }, () => 0),
+    };
+    const valle = fire(downhill, 45);
+    const plano = fire(flat, 45);
+    expect(valle.impacted).toBe(true);
+    expect(valle.impactPoint.z).toBeLessThan(-300); // aterriza en el valle real
+    expect(valle.downrange).toBeGreaterThan(plano.downrange + 200); // parábola extendida
+  });
+
+  it('máscara de cresta: un tiro tenso choca con la ladera aunque vaya SUBIENDO', () => {
+    // Muro de 400 m entre s=1.6 y s=2.4 km; a QE 8º el proyectil pasa por ahí
+    // a ~250 m y todavía ascendiendo: sin la puerta nueva lo atravesaba.
+    const ridgeAt = (i: number) => (i >= 4 && i <= 6 ? 400 : 0);
+    const ridge: TerrainSpec = {
+      dirE: 1, dirN: 0, stepAlongM: 400, rows: 1,
+      profile: Array.from({ length: 70 }, (_, i) => ridgeAt(i)),
+    };
+    const conCresta = fire(ridge, 8);
+    const sinTerreno = fire(undefined, 8);
+    expect(sinTerreno.downrange).toBeGreaterThan(8000); // referencia: vuela lejos
+    expect(conCresta.impacted).toBe(true);
+    expect(conCresta.downrange).toBeGreaterThan(1200);
+    expect(conCresta.downrange).toBeLessThan(2500); // se estrella en el muro
+    // El impacto queda en la cara de la ladera, por encima del plano base.
+    expect(conCresta.impactPoint.z).toBeGreaterThan(50);
+  });
+
+  it('en plano (modo OSM) nada cambia: terreno a 0 == sin terreno, bit a bit', () => {
+    const zeros: TerrainSpec = {
+      dirE: 1, dirN: 0, stepAlongM: 400, rows: 1,
+      profile: Array.from({ length: 90 }, () => 0),
+    };
+    const a = fire(zeros, 45);
+    const b = fire(undefined, 45);
+    expect(a.downrange).toBe(b.downrange);
+    expect(a.timeOfFlight).toBe(b.timeOfFlight);
+    expect(a.impactPoint.z).toBe(b.impactPoint.z);
+  });
+});
