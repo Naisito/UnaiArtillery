@@ -20,6 +20,7 @@ import { GunModel } from './GunModel';
 import { ArtilleryPiece } from './ArtilleryPiece';
 import { ControlPanel } from './ui/ControlPanel';
 import { Cockpit } from './ui/Cockpit';
+import { FiringTablePanel } from './ui/FiringTablePanel';
 import { WeatherPanel } from './ui/Weather';
 import { HUD } from './ui/HUD';
 import { toast } from './ui/toast';
@@ -55,10 +56,16 @@ async function boot(): Promise<void> {
       gun.setWeapon(panel.weapon()); // P-PRO.1 — nueva silueta (dispose limpio)
       piece.clearTarget();
       piece.schedulePreview(0);
+      firingTable.notifyChanged();
     },
     onRoundChanged: (index) => {
       service.roundIndex = index; // P-PRO.4 — el worker integra ESTA munición
       piece.schedulePreview(0);
+      firingTable.notifyChanged();
+    },
+    onChargeChanged: () => {
+      piece.schedulePreview();
+      firingTable.notifyChanged();
     },
     onFire: () => void piece.fire(),
     onMRSI: (n) => void piece.fireMRSI(n),
@@ -109,7 +116,15 @@ async function boot(): Promise<void> {
     service, overlay, vfx, audio, preview, director, panel, hud, craters, gun,
   );
   const weather = new WeatherPanel(service);
-  weather.onChange = () => piece.schedulePreview(250);
+
+  // P-PRO.5 — tabla de tiro interactiva (arma/carga/meteo actuales).
+  const firingTable = new FiringTablePanel(service, panel, () => piece.schedulePreview(0));
+  piece.onPreview = (fr) => firingTable.setPreviewRange(fr.downrange);
+
+  weather.onChange = () => {
+    piece.schedulePreview(250);
+    firingTable.notifyChanged();
+  };
 
   // P-NEXT.1 — cockpit de puntería fina + cámara de cabina.
   const cockpit = new Cockpit(panel, () => piece.schedulePreview());
@@ -155,6 +170,7 @@ async function boot(): Promise<void> {
         preview.clearAll();
         piece.clearTarget();
         piece.schedulePreview(0);
+        firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
         flyToBattery(true);
         toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
       })();

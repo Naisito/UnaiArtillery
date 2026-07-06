@@ -18,8 +18,8 @@ import * as Cesium from 'cesium';
 import { GeoFrame } from './frame';
 import { Atmosphere, Vec3, Weapon, WeaponCatalog, WeaponId, WindProfilePoint } from './ballistics';
 import type {
-  DispersionErrors, DispersionResult, FireOrder, FlightResult, MrsiRound, SolveResult,
-  SolverConfig,
+  DispersionErrors, DispersionResult, FireOrder, FiringTable, FlightResult, MrsiRound,
+  SolveResult, SolverConfig,
 } from './ballistics';
 import {
   AtmoSpec, CancelMessage, CompareEntry, RangeRing, SolverConfigSpec, TerrainSpec,
@@ -59,6 +59,8 @@ export class BallisticsService {
   private windSpec: WindSpec = { kind: 'none' };
   private readonly ringCache = new Map<string, RangeRing>();
   private readonly ringInFlight = new Map<string, Promise<RangeRing>>();
+  /** P-PRO.5 — tablas de tiro por clave (arma+munición+carga+meteo+latitud). */
+  private readonly tableCache = new Map<string, FiringTable>();
 
   private worker: Worker | null = null;
   private nextId = 1;
@@ -413,6 +415,43 @@ export class BallisticsService {
       terrain,
     });
     return hydrateCompare(raw);
+  }
+
+  /**
+   * P-PRO.5 — tabla de tiro del arma/carga con la meteo ACTUAL (la columna de
+   * deriva incluye el viento). Cachea por clave completa: cambiar viento,
+   * temperatura, presión, munición o batería invalida sola la entrada. Corre
+   * en el worker (carril propio): el globo no se congela.
+   */
+  async generateFiringTable(
+    id: WeaponId,
+    chargeIndex: number,
+    stepM: number,
+  ): Promise<FiringTable> {
+    const key = JSON.stringify({
+      id, round: this.roundIndex, chargeIndex, stepM,
+      atmo: this.atmoSpec(), lat: this.frame.latDeg,
+    });
+    const hit = this.tableCache.get(key);
+    if (hit) return hit;
+    const table = await this.call<FiringTable>(
+      {
+        op: 'generateFiringTable',
+        weaponId: id,
+        roundIndex: this.roundIndex,
+        chargeIndex,
+        stepM,
+        muzzle: this.muzzleEnu,
+        atmo: this.atmoSpec(),
+        cfg: this.makeConfigSpec({ dt: 0.01 }), // ±0.1%: de sobra para la lección
+      },
+      'firing-table',
+    );
+    if (this.tableCache.size >= 8) {
+      this.tableCache.delete(this.tableCache.keys().next().value!); // FIFO
+    }
+    this.tableCache.set(key, table);
+    return table;
   }
 
   // -- Terreno ---------------------------------------------------------------

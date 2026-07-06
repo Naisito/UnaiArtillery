@@ -171,6 +171,54 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
 #hud .cell .v.mach-super { color: var(--accent); }
 #hud canvas { width: 100%; height: 60px; margin-top: 8px; }
 
+/* --- Tabla de tiro (P-PRO.5) ---------------------------------------------- */
+#firingTable {
+  right: 16px;
+  bottom: 16px;
+  width: 340px;
+  padding: 8px;
+}
+#firingTable .ft-head {
+  flex: 1;
+  font-size: 12px;
+  color: var(--accent2);
+  font-variant-numeric: tabular-nums;
+}
+#firingTable .ft-scroll {
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.ft-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ft-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(12, 16, 20, 0.95);
+  color: var(--dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  padding: 5px 8px;
+  text-align: right;
+}
+.ft-table td {
+  padding: 3px 8px;
+  text-align: right;
+  border-top: 1px solid var(--line);
+  color: var(--text);
+}
+.ft-table tr.aimable { cursor: pointer; }
+.ft-table tr.aimable:hover td { background: rgba(255, 181, 69, 0.12); }
+.ft-table tr.current td { background: rgba(77, 195, 255, 0.14); color: var(--accent2); }
+
 /* --- Toast de avisos ------------------------------------------------------ */
 #toast {
   position: absolute;

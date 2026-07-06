@@ -8,6 +8,7 @@
 //  proyectil (con retardos para la salva MRSI).
 // ============================================================================
 import { FireOrder, Vec3, WeaponSystem } from './ballistics';
+import type { FlightResult } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { CameraDirector } from './CameraDirector';
 import { GunModel } from './GunModel';
@@ -23,6 +24,8 @@ import { toast } from './ui/toast';
 
 export class ArtilleryPiece {
   targetEnu: Vec3 | null = null;
+  /** P-PRO.5/6 — el preview vigente cambió (tabla de tiro, elipse PER…). */
+  onPreview?: (fr: FlightResult) => void;
 
   private presenters: ProjectilePresenter[] = [];
   private previewToken = 0;
@@ -68,6 +71,7 @@ export class ArtilleryPiece {
       if (token !== this.previewToken) return; // llegó otro preview más nuevo
       this.preview.showFlight(result);
       this.preview.showRings(ring.minRangeM, ring.maxRangeM);
+      this.onPreview?.(result);
       this.panel.setSolution(
         `QE ${this.panel.elevationDeg.toFixed(1)}º → ${(result.downrange / 1000).toFixed(2)} km · ` +
           `TOF ${result.timeOfFlight.toFixed(1)} s · ápice ${(result.apex / 1000).toFixed(1)} km`,

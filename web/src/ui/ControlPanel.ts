@@ -13,6 +13,8 @@ export interface ControlCallbacks {
   onWeaponChanged(): void;
   /** P-PRO.4 — cambio de munición (índice en Weapon.rounds). */
   onRoundChanged(index: number): void;
+  /** P-PRO.5 — cambio de carga (la tabla de tiro depende de ella). */
+  onChargeChanged(): void;
   onFire(): void;
   onMRSI(rounds: number): void;
   onCompare(): void;
@@ -100,7 +102,7 @@ export class ControlPanel {
     this.chargeSelect = document.createElement('select');
     this.chargeSelect.onchange = () => {
       this.chargeIndex = Number(this.chargeSelect.value);
-      this.cb.onAimChanged();
+      this.cb.onChargeChanged();
     };
     el.appendChild(this.chargeSelect);
 

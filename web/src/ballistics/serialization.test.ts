@@ -15,6 +15,7 @@ import type { FlightResult } from './BallisticsSolver';
 import { Vec3 } from './Vec3';
 import { WeaponCatalog } from './WeaponCatalog';
 import { FireOrder, WeaponSystem } from './WeaponSystem';
+import { FiringTable, generateFiringTable } from './FiringTables';
 import {
   AtmoSpec, DECIMATE_EVERY, RangeRing, TerrainSpec, WorkerRequest,
   buildAtmosphere, buildTerrain, executeRequest, hydrateFlightResult, windFieldOf,
@@ -171,6 +172,25 @@ describe('P-NEXT.5 — protocolo de serialización del worker', () => {
     }
     expect(ring.maxRangeM).toBe(maxR);
     expect(ring.minRangeM).toBe(minR);
+  });
+
+  it('P-PRO.5 — generateFiringTable vía protocolo == núcleo directo', () => {
+    const req: WorkerRequest = {
+      id: 3,
+      op: 'generateFiringTable',
+      weaponId: 'm777',
+      chargeIndex: 3,
+      stepM: 5000,
+      muzzle: { x: 0, y: 0, z: 3 },
+      atmo: ATMO,
+      cfg: { dt: 0.02, latitudeDeg: 40.75, enableCoriolis: true, groundZ: 0, maxFlight: 700 },
+    };
+    const viaOp = executeRequest(structuredClone(req)) as FiringTable;
+    const direct = generateFiringTable(WeaponCatalog.m777(), 3, {
+      stepM: 5000, dt: 0.02, latitudeDeg: 40.75, atmosphere: buildAtmosphere(ATMO),
+    });
+    expect(viaOp).toEqual(direct); // misma tabla, fila a fila y bit a bit
+    expect(viaOp.rows.length).toBeGreaterThan(2);
   });
 });
 

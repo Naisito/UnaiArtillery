@@ -19,6 +19,7 @@
 // ============================================================================
 import { Atmosphere, AtmosphereModel, WindField, WindProfilePoint } from './Atmosphere';
 import { FlightResult, SolverConfig } from './BallisticsSolver';
+import { FiringTable, generateFiringTable } from './FiringTables';
 import { Vec3 } from './Vec3';
 import { WeaponCatalog, WeaponId } from './WeaponCatalog';
 import {
@@ -190,7 +191,8 @@ export type WorkerRequest =
       nRounds: number;
       errors: DispersionErrors;
       seed: number;
-    });
+    })
+  | (BaseRequest & { op: 'generateFiringTable'; chargeIndex: number; stepM: number });
 
 /** Petición sin id (el servicio lo asigna). Omit distributivo sobre la unión. */
 export type WorkerRequestBody = WorkerRequest extends infer R
@@ -294,6 +296,18 @@ export function executeRequest(req: WorkerRequest): unknown {
         decimatePath(fr, fr.timeOfFlight > DECIMATE_ABOVE_TOF_S ? DECIMATE_EVERY : 1),
       );
       return res;
+    }
+
+    case 'generateFiringTable': {
+      // P-PRO.5 — tabla de tiro con la meteo actual (el atmo trae el viento:
+      // la columna de deriva lo refleja). FiringTable ya es un objeto plano.
+      const table: FiringTable = generateFiringTable(weapon, req.chargeIndex, {
+        stepM: req.stepM,
+        dt: req.cfg.dt,
+        latitudeDeg: req.cfg.latitudeDeg,
+        atmosphere: atmo,
+      });
+      return table;
     }
 
     case 'approxMaxRange': {
