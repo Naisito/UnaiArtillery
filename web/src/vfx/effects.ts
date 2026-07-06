@@ -27,6 +27,73 @@ export interface Effect {
 type WindFn = (posEnu: Vec3) => Vec3;
 
 // ---------------------------------------------------------------------------
+//  P-PRO.8 — Pool global de sprites para PuffCloud.
+//
+//  Antes cada bocanada creaba y destruía Sprite+SpriteMaterial (presión de GC
+//  con salvas y sesiones largas). Ahora un pool con cap global ~600 los
+//  presta y recupera: adquirir configura color/opacidad/rotación del material
+//  YA existente; al agotarse el cap se ROBA el más viejo (su dueño lo suelta
+//  al instante). Los contadores de info.memory quedan planos tras calentar.
+// ---------------------------------------------------------------------------
+const PUFF_POOL_CAP = 600;
+
+interface PuffLease { sprite: THREE.Sprite; evict: () => void; }
+
+class PuffPool {
+  private free: THREE.Sprite[] = [];
+  private live: PuffLease[] = []; // en orden de adquisición (el [0] es el más viejo)
+  private created = 0;
+
+  acquire(evict: () => void): THREE.Sprite {
+    let sprite = this.free.pop();
+    if (!sprite) {
+      if (this.created < PUFF_POOL_CAP) {
+        sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: getPuffTexture(),
+          transparent: true,
+          depthWrite: false,
+        }));
+        this.created++;
+      } else {
+        // Cap agotado: el puff más viejo cede el sitio (su dueño lo libera).
+        const oldest = this.live.shift();
+        oldest?.evict();
+        sprite = this.free.pop();
+        if (!sprite) {
+          // El dueño no liberó (no debería pasar): crea uno fuera de cap.
+          sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: getPuffTexture(), transparent: true, depthWrite: false,
+          }));
+          this.created++;
+        }
+      }
+    }
+    sprite.visible = true;
+    this.live.push({ sprite, evict });
+    return sprite;
+  }
+
+  release(sprite: THREE.Sprite): void {
+    const idx = this.live.findIndex((l) => l.sprite === sprite);
+    if (idx >= 0) this.live.splice(idx, 1);
+    sprite.visible = false;
+    sprite.parent?.remove(sprite);
+    this.free.push(sprite);
+  }
+
+  get stats(): { created: number; live: number; free: number } {
+    return { created: this.created, live: this.live.length, free: this.free.length };
+  }
+}
+
+const puffPool = new PuffPool();
+
+/** P-PRO.8 — contadores del pool para el overlay ?stats=1. */
+export function puffPoolStats(): { created: number; live: number; free: number } {
+  return puffPool.stats;
+}
+
+// ---------------------------------------------------------------------------
 //  Nube de partículas genérica (humo, polvo, condensación, escombros).
 // ---------------------------------------------------------------------------
 interface Puff {
@@ -64,18 +131,14 @@ class PuffCloud implements Effect {
     opacity?: number;
     color?: THREE.ColorRepresentation;
   }): void {
-    const mat = new THREE.SpriteMaterial({
-      map: getPuffTexture(),
-      color: opts.color ?? this.color,
-      transparent: true,
-      depthWrite: false,
-      opacity: opts.opacity ?? 0.5,
-    });
-    const sprite = new THREE.Sprite(mat);
+    // P-PRO.8 — sprite prestado del pool: se CONFIGURA, no se crea.
+    const sprite = puffPool.acquire(() => this.evict(sprite));
+    const mat = sprite.material;
+    mat.color.set(opts.color ?? this.color);
+    mat.opacity = opts.opacity ?? 0.5;
+    mat.rotation = Math.random() * Math.PI * 2; // rompe el patrón radial
     sprite.position.copy(opts.pos);
     sprite.scale.setScalar(opts.size);
-    // Rotación aleatoria fija para romper el patrón radial.
-    mat.rotation = Math.random() * Math.PI * 2;
     this.group.add(sprite);
     this.puffs.push({
       sprite,
@@ -92,14 +155,22 @@ class PuffCloud implements Effect {
 
   get alive(): boolean { return this.puffs.length > 0; }
 
+  /** El pool reclama este sprite (cap agotado): soltarlo YA. */
+  private evict(sprite: THREE.Sprite): void {
+    const i = this.puffs.findIndex((p) => p.sprite === sprite);
+    if (i >= 0) {
+      this.puffs.splice(i, 1);
+      puffPool.release(sprite);
+    }
+  }
+
   update(dt: number): boolean {
     const g = 9.80665;
     for (let i = this.puffs.length - 1; i >= 0; i--) {
       const p = this.puffs[i];
       p.age += dt;
       if (p.age >= p.life) {
-        this.group.remove(p.sprite);
-        p.sprite.material.dispose();
+        puffPool.release(p.sprite); // vuelve al pool, nada se destruye
         this.puffs.splice(i, 1);
         continue;
       }
@@ -119,10 +190,7 @@ class PuffCloud implements Effect {
   }
 
   dispose(): void {
-    for (const p of this.puffs) {
-      this.group.remove(p.sprite);
-      p.sprite.material.dispose();
-    }
+    for (const p of this.puffs) puffPool.release(p.sprite);
     this.puffs = [];
     this.parent.remove(this.group);
   }

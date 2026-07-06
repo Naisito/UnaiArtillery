@@ -219,6 +219,20 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
 .ft-table tr.aimable:hover td { background: rgba(255, 181, 69, 0.12); }
 .ft-table tr.current td { background: rgba(77, 195, 255, 0.14); color: var(--accent2); }
 
+/* --- Overlay de rendimiento (?stats=1, P-PRO.8) --------------------------- */
+#statsOverlay {
+  position: absolute;
+  z-index: 30;
+  bottom: 4px;
+  right: 8px;
+  font: 11px/1.6 Consolas, monospace;
+  color: var(--ok);
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
 /* --- Toast de avisos ------------------------------------------------------ */
 #toast {
   position: absolute;
