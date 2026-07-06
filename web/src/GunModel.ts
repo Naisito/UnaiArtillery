@@ -118,9 +118,12 @@ export class GunModel {
       case 'Howitzer': this.buildHowitzer(d, weapon.traverseDeg >= 360); break;
       case 'Rocket': this.buildRocket(d); break;
       case 'Missile': this.buildMissile(d); break;
+      case 'SmallArms': this.buildSmallArm(d); break;
     }
     this.recoilAmpM =
-      weapon.category === 'Mortar' ? 0.12 : Math.min(0.5, Math.max(0.3, d * 2.2));
+      weapon.category === 'SmallArms' ? 0.03
+      : weapon.category === 'Mortar' ? 0.12
+      : Math.min(0.5, Math.max(0.3, d * 2.2));
     this.recoilAge = Number.POSITIVE_INFINITY;
     this.update(0, this.azimuthDeg, this.elevationDeg);
   }
@@ -230,6 +233,45 @@ export class GunModel {
       pivotY: 0, pivotZ: 0.16,
       length: d * 14.5,           // 120 mm -> ~1.75 m
       rMuzzle: d * 0.62, rBreech: d * 0.72, backLen: 0.1,
+      mat: steel,
+    });
+  }
+
+  /** Arma ligera: trípode + cajón de mecanismos + cañón fino a escala real.
+   *  El modelo es pequeño de verdad (una M2 mide ~1.7 m): la Cabina queda
+   *  encima como un tirador de pie y las demás cámaras la ven diminuta —
+   *  correcto, es la escala del arma. */
+  private buildSmallArm(d: number): void {
+    const dark = this.mat(0x33383a, 0.55, 0.45);
+    const steel = this.mat(0x454b47, 0.6, 0.4);
+
+    // Trípode: tres patas hacia atrás/lados, rótula a ~1 m.
+    const hubZ = 1.0;
+    for (const [ang, lean] of [[0, 34], [130, 30], [-130, 30]] as const) {
+      const leg = this.mesh(new THREE.CylinderGeometry(0.02, 0.025, 1.25, 8), dark);
+      const a = ang * DEG;
+      leg.position.set(Math.sin(a) * 0.34, -Math.abs(Math.cos(a)) * 0.1 + Math.cos(a) * 0.34, hubZ / 2);
+      leg.rotation.x = Math.cos(a) * lean * DEG;
+      leg.rotation.y = 0;
+      leg.rotation.z = -Math.sin(a) * lean * DEG;
+      this.turret.add(leg);
+    }
+
+    // Cajón de mecanismos (receiver) sobre la rótula, solidario a la cuna.
+    const receiver = this.box(0.16, 0.62, 0.18, steel);
+    receiver.position.set(0, -0.1, 0);
+    this.cradle.add(receiver);
+    // Culata/gatillo esquemático atrás.
+    const grip = this.box(0.1, 0.16, 0.12, dark);
+    grip.position.set(0, -0.42, -0.05);
+    this.cradle.add(grip);
+
+    this.installBarrel({
+      pivotY: 0.15, pivotZ: hubZ,
+      length: Math.max(0.5, d * 85),   // 12.7 mm -> ~1.1 m de cañón
+      rMuzzle: Math.max(0.012, d * 0.9),
+      rBreech: Math.max(0.016, d * 1.2),
+      backLen: 0.05,
       mat: steel,
     });
   }

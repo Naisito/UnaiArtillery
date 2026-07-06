@@ -260,7 +260,8 @@ export class ProjectilePresenter {
     // P-NEXT.7 — huella persistente: quemadura + labio de tierra. El decal se
     // clava al SUELO VISUAL (teselas 3D / terreno real): la z de física puede
     // diferir de lo que se ve (corredor interpolado, edificios de Google).
-    if (this.craters) {
+    // Las balas (sin carga explosiva) no dejan cráter: solo polvareda.
+    if (this.craters && this.flight.warheadTNTeq >= 0.05) {
       const craters = this.craters;
       const yieldEq = this.flight.warheadTNTeq;
       this.service

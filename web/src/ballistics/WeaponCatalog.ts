@@ -19,7 +19,8 @@ import { Munition } from './Munition';
 
 export type WeaponId =
   | 'mortar120' | 'm777' | 'm109' | 'pion2s7' | 'excalibur'
-  | 'gmlrs' | 'm26' | 'ergmlrs' | 'tacticalMissile' | 'prsm';
+  | 'gmlrs' | 'm26' | 'ergmlrs' | 'tacticalMissile' | 'prsm'
+  | 'pistol9' | 'rifle556' | 'mg762' | 'm2browning';
 export type CatalogVariant = 'bc' | 'legacy';
 
 /** A propellant "charge" (zone): same shell, different muzzle velocity. */
@@ -30,7 +31,7 @@ export interface ChargeZone {
 
 export class Weapon {
   name = '';
-  category: 'Mortar' | 'Howitzer' | 'Rocket' | 'Missile' = 'Howitzer';
+  category: 'Mortar' | 'Howitzer' | 'Rocket' | 'Missile' | 'SmallArms' = 'Howitzer';
   minElevationDeg = 0.0;
   maxElevationDeg = 70.0;
   traverseDeg = 360.0;
@@ -473,6 +474,89 @@ export class WeaponCatalog {
     return w;
   }
 
+
+  // ==========================================================================
+  //  Armas de mano y ametralladoras — misma física, otra escala.
+  //  A diferencia de la artillería (BC ajustados al alcance publicado), los
+  //  BC de armas ligeras SÍ están medidos y publicados (Litz/fabricantes) en
+  //  lb/in², exactamente las unidades del solver: aquí no se calibra nada.
+  //  Los factores de forma salen 0.97-1.17, como deben. Sin carga explosiva:
+  //  warheadMassTNTeq ~0 (impacto = polvareda, sin cráter).
+  // ==========================================================================
+
+  private static smallArm(opts: {
+    name: string; roundName: string; massKg: number; diameterM: number;
+    v0: number; dragModel: 'G1' | 'G7'; bc: number; twistCalibers: number;
+    maxElevationDeg: number; reloadTime: number;
+  }): Weapon {
+    const m = new Munition();
+    m.name = opts.roundName;
+    m.mass = opts.massKg;
+    m.diameter = opts.diameterM;
+    m.muzzleVelocity = opts.v0;
+    m.warheadMassTNTeq = 0.001; // bala: sin explosivo (VFX mínimo, sin cráter)
+    m.dragModel = opts.dragModel;
+    m.ballisticCoefficient = opts.bc; // PUBLICADO, no calibrado
+    m.spinStabilized = true;
+    m.twistCalibers = opts.twistCalibers;
+    m.rightHandTwist = true;
+
+    const w = new Weapon();
+    w.name = opts.name;
+    w.category = 'SmallArms';
+    w.minElevationDeg = 0.0;
+    w.maxElevationDeg = opts.maxElevationDeg;
+    w.traverseDeg = 360.0;
+    w.reloadTime = opts.reloadTime;
+    w.round = m;
+    w.charges = [];
+    return w;
+  }
+
+  /** Pistola 9×19 mm (124 gr FMJ, G1 0.145 publicado). Alcance máx ~1.7 km. */
+  static pistol9(): Weapon {
+    return WeaponCatalog.smallArm({
+      name: 'Pistola 9mm', roundName: '9×19 mm FMJ 124 gr',
+      massKg: 0.00804, diameterM: 0.00901, v0: 360,
+      dragModel: 'G1', bc: 0.145,
+      twistCalibers: 28, // 1:10" en calibre .355
+      maxElevationDeg: 45, reloadTime: 0.5,
+    });
+  }
+
+  /** Fusil 5.56×45 NATO (M855 62 gr, G7 0.151 medido). Alcance máx ~3.6 km. */
+  static rifle556(): Weapon {
+    return WeaponCatalog.smallArm({
+      name: 'Fusil 5.56 NATO', roundName: '5.56×45 M855 62 gr',
+      massKg: 0.00402, diameterM: 0.0057, v0: 920,
+      dragModel: 'G7', bc: 0.151,
+      twistCalibers: 31, // 1:7" en calibre .224
+      maxElevationDeg: 50, reloadTime: 0.15,
+    });
+  }
+
+  /** Ametralladora 7.62×51 NATO (M80 147 gr, G7 0.195). Alcance máx ~4 km. */
+  static mg762(): Weapon {
+    return WeaponCatalog.smallArm({
+      name: 'M240 · AMT 7.62 NATO', roundName: '7.62×51 M80 147 gr',
+      massKg: 0.00952, diameterM: 0.00782, v0: 850,
+      dragModel: 'G7', bc: 0.195,
+      twistCalibers: 39, // 1:12" en calibre .308
+      maxElevationDeg: 60, reloadTime: 0.12,
+    });
+  }
+
+  /** M2 Browning 12.7×99 (.50 M33 660 gr, G7 0.35). Alcance máx ~6.8 km. */
+  static m2browning(): Weapon {
+    return WeaponCatalog.smallArm({
+      name: 'M2 Browning · .50 BMG', roundName: '12.7×99 M33 660 gr',
+      massKg: 0.0429, diameterM: 0.01295, v0: 890,
+      dragModel: 'G7', bc: 0.35,
+      twistCalibers: 29, // 1:15" en calibre .510
+      maxElevationDeg: 60, reloadTime: 0.12,
+    });
+  }
+
   static get(id: WeaponId, variant: CatalogVariant = 'bc'): Weapon {
     switch (id) {
       case 'mortar120': return WeaponCatalog.mortar120(variant);
@@ -485,6 +569,10 @@ export class WeaponCatalog {
       case 'ergmlrs': return WeaponCatalog.erGMLRS();
       case 'tacticalMissile': return WeaponCatalog.tacticalMissile(variant);
       case 'prsm': return WeaponCatalog.prsm();
+      case 'pistol9': return WeaponCatalog.pistol9();
+      case 'rifle556': return WeaponCatalog.rifle556();
+      case 'mg762': return WeaponCatalog.mg762();
+      case 'm2browning': return WeaponCatalog.m2browning();
     }
   }
 
@@ -496,6 +584,7 @@ export class WeaponCatalog {
     return [
       'mortar120', 'm777', 'm109', 'pion2s7', 'excalibur',
       'gmlrs', 'm26', 'ergmlrs', 'tacticalMissile', 'prsm',
+      'pistol9', 'rifle556', 'mg762', 'm2browning',
     ];
   }
 }

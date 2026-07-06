@@ -109,6 +109,10 @@ async function boot(): Promise<void> {
       if (active) toast('Clic en el globo para desplegar la batería ahí');
     },
     onGoogleTiles: (active) => void applyGoogleTiles(active),
+    onToggleArc: (visible) => {
+      preview.setArcVisible(visible);
+      if (visible) piece.schedulePreview(0); // re-pinta el arco al volver
+    },
   });
 
   // Los edificios 3D NUNCA entran solos: siempre a golpe de toggle (cuota).

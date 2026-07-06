@@ -322,6 +322,46 @@ describe('P-PRO.6 — elipse de error predicha vs Monte-Carlo', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('Armas de mano y ametralladoras — BC publicados, no calibrados', () => {
+  // A diferencia de la artillería (BC ajustados al alcance), los BC de armas
+  // ligeras están MEDIDOS (Litz/fabricantes): que el solver reproduzca el
+  // alcance máximo publicado con ellos es validación real de la física.
+  const inBand = (r: number, publishedM: number) => {
+    expect(r).toBeGreaterThan(publishedM * 0.8);
+    expect(r).toBeLessThan(publishedM * 1.2);
+  };
+
+  it('9×19 mm (G1 0.145) alcanza ~1.7 km', () => {
+    inBand(maxRange(WeaponCatalog.pistol9(), -1), 1700);
+  });
+
+  it('5.56 M855 (G7 0.151) alcanza ~3.6 km', () => {
+    inBand(maxRange(WeaponCatalog.rifle556(), -1), 3600);
+  });
+
+  it('7.62 M80 (G7 0.195) alcanza ~3.9 km', () => {
+    inBand(maxRange(WeaponCatalog.mg762(), -1), 3900);
+  });
+
+  it('.50 M33 (G7 0.35) alcanza ~6.8 km', () => {
+    inBand(maxRange(WeaponCatalog.m2browning(), -1), 6800);
+  });
+
+  it('factores de forma físicamente exactos (0.9–1.25) y sin cráter (yield ~0)', () => {
+    for (const w of [
+      WeaponCatalog.pistol9(), WeaponCatalog.rifle556(),
+      WeaponCatalog.mg762(), WeaponCatalog.m2browning(),
+    ]) {
+      const i = w.round.formFactor();
+      expect(i).toBeGreaterThan(0.9);
+      expect(i).toBeLessThan(1.25);
+      expect(w.round.warheadMassTNTeq).toBeLessThan(0.05); // balas: sin cráter
+      expect(w.category).toBe('SmallArms');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('P1.2 — spin drift + Magnus', () => {
   // Fire due East at QE 45, no wind, Coriolis OFF to isolate the spin terms.
   function spinShot(rightHand: boolean, spinOn = true) {

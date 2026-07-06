@@ -50,8 +50,17 @@ export class TrajectoryPreview {
   }
 
   /** Dibuja el arco previsto + ápice + impacto. */
+  /** Modo inmersión: ocultar el arco de preview y ver solo el proyectil. */
+  private arcVisible = true;
+
+  setArcVisible(on: boolean): void {
+    this.arcVisible = on;
+    if (!on) this.clearArc();
+  }
+
   showFlight(result: FlightResult, cssColor = '#ffb545'): void {
     this.clearArc();
+    if (!this.arcVisible) return; // inmersión: sin parábola ni marcadores
     if (result.path.length < 2) return;
     const frame = this.frameOf();
     const color = Cesium.Color.fromCssColorString(cssColor);

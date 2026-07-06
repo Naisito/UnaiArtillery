@@ -26,6 +26,8 @@ export interface ControlCallbacks {
   onMoveBattery(active: boolean): void;
   /** P-NEXT.3 — toggle de Google Photorealistic 3D Tiles. */
   onGoogleTiles(active: boolean): void;
+  /** Ocultar la parábola de preview (modo inmersión: solo el proyectil). */
+  onToggleArc(visible: boolean): void;
 }
 
 const WEAPON_LABELS: Record<WeaponId, string> = {
@@ -39,7 +41,26 @@ const WEAPON_LABELS: Record<WeaponId, string> = {
   ergmlrs: 'ER GMLRS · 227 mm 150 km',
   tacticalMissile: 'Misil balístico táctico',
   prsm: 'PrSM · Misil 500 km',
+  pistol9: 'Pistola 9 mm',
+  rifle556: 'Fusil 5.56 NATO',
+  mg762: 'M240 · Ametralladora 7.62',
+  m2browning: 'M2 Browning · .50 BMG',
 };
+
+/** Secciones del selector: artillería vs armas de mano (calibres ligeros). */
+const WEAPON_GROUPS: { label: string; ids: WeaponId[] }[] = [
+  {
+    label: 'Artillería y cohetes',
+    ids: [
+      'mortar120', 'm777', 'm109', 'pion2s7', 'excalibur',
+      'gmlrs', 'm26', 'ergmlrs', 'tacticalMissile', 'prsm',
+    ],
+  },
+  {
+    label: 'Armas de mano y ametralladoras',
+    ids: ['pistol9', 'rifle556', 'mg762', 'm2browning'],
+  },
+];
 
 export class ControlPanel {
   weaponId: WeaponId = 'm777';
@@ -74,11 +95,16 @@ export class ControlPanel {
 
     // -- Arma y carga --------------------------------------------------------
     const weaponSel = document.createElement('select');
-    for (const id of WeaponCatalog.ids()) {
-      const opt = document.createElement('option');
-      opt.value = id;
-      opt.textContent = WEAPON_LABELS[id];
-      weaponSel.appendChild(opt);
+    for (const group of WEAPON_GROUPS) {
+      const og = document.createElement('optgroup');
+      og.label = group.label;
+      for (const id of group.ids) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = WEAPON_LABELS[id];
+        og.appendChild(opt);
+      }
+      weaponSel.appendChild(og);
     }
     weaponSel.value = this.weaponId;
     weaponSel.onchange = () => {
@@ -158,6 +184,18 @@ export class ControlPanel {
     };
     highRow.append(highLab, high);
     el.appendChild(highRow);
+
+    const arcRow = document.createElement('div');
+    arcRow.className = 'row';
+    const arcLab = document.createElement('label');
+    arcLab.textContent = 'Parábola (preview)';
+    arcLab.title = 'Desmárcalo para ver solo el proyectil en vuelo, sin el arco previsto';
+    const arc = document.createElement('input');
+    arc.type = 'checkbox';
+    arc.checked = true;
+    arc.onchange = () => this.cb.onToggleArc(arc.checked);
+    arcRow.append(arcLab, arc);
+    el.appendChild(arcRow);
 
     // -- Acciones ------------------------------------------------------------
     const grid = document.createElement('div');
@@ -300,7 +338,10 @@ export class ControlPanel {
     if (w.charges.length === 0) {
       const opt = document.createElement('option');
       opt.value = '-1';
-      opt.textContent = w.category === 'Rocket' ? 'Motor cohete (fijo)' : 'Carga única';
+      opt.textContent =
+        w.category === 'Rocket' ? 'Motor cohete (fijo)'
+        : w.category === 'SmallArms' ? `Cartucho único · ${w.round.muzzleVelocity} m/s`
+        : 'Carga única';
       this.chargeSelect.appendChild(opt);
       this.chargeIndex = -1;
     } else {
