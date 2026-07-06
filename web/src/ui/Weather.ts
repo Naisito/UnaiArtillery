@@ -1,12 +1,16 @@
 // ============================================================================
-//  Weather.ts — Panel de meteorología en vivo.  [P-WEB.7 / P1.7]
+//  Weather.ts — Panel de meteorología en vivo.  [P-WEB.7 / P1.7 / P-PRO.2]
 //
 //  Viento (velocidad + rumbo), temperatura y presión a nivel del mar. Todo
 //  recalcula la física en vivo (el arco de preview se rehace al soltar).
-//  El botón de cizalladura carga el perfil por altitud de ejemplo (P1.7).
+//  El botón de cizalladura carga el perfil por altitud de ejemplo (P1.7) y
+//  "🌍 Meteo real" instala la atmósfera de Open-Meteo aquí y ahora (P-PRO.2):
+//  perfil de viento por niveles de presión + T/P reducidas al nivel del mar.
+//  Tocar cualquier control manual desactiva el modo real.
 // ============================================================================
 import { Atmosphere } from '../ballistics';
 import { BallisticsService } from '../BallisticsService';
+import { fetchOpenMeteo } from './openMeteo';
 import { toast } from './toast';
 
 export class WeatherPanel {
@@ -18,6 +22,9 @@ export class WeatherPanel {
   private tempC = 15;
   private pressureHPa = 1013.25;
   private profileActive = false;
+  /** P-PRO.2 — la meteo real manda hasta que el usuario toque algo manual. */
+  private realActive = false;
+  private realBtn!: HTMLButtonElement;
   private modeLabel!: HTMLElement;
 
   constructor(private readonly service: BallisticsService) {
@@ -53,18 +60,67 @@ export class WeatherPanel {
     const shear = document.createElement('button');
     shear.textContent = 'Perfil con cizalladura';
     shear.title = 'Carga el perfil por altitud de ejemplo (viento que rota y arrecia)';
-    shear.onclick = () => void this.loadShearProfile();
+    shear.onclick = () => {
+      this.realActive = false;
+      this.realBtn.classList.remove('toggled');
+      void this.loadShearProfile();
+    };
     const steady = document.createElement('button');
     steady.textContent = 'Viento constante';
     steady.onclick = () => {
+      this.realActive = false;
+      this.realBtn.classList.remove('toggled');
       this.profileActive = false;
       this.applyWind();
     };
     btns.append(shear, steady);
+
+    // P-PRO.2 — atmósfera real de la posición de la batería, ahora mismo.
+    this.realBtn = document.createElement('button');
+    this.realBtn.className = 'wide';
+    this.realBtn.textContent = '🌍 Meteo real (aquí y ahora)';
+    this.realBtn.title =
+      'Open-Meteo: viento por niveles de presión (1000→200 hPa) + T/P reales de la batería';
+    this.realBtn.onclick = () => void this.loadRealWeather(false);
+    btns.appendChild(this.realBtn);
     el.appendChild(btns);
 
     this.applyWind();
     this.applyAtmo();
+  }
+
+  /** P-PRO.2 — la batería se movió: re-consulta SOLO si el modo real sigue activo. */
+  onBatteryMoved(): void {
+    if (this.realActive) void this.loadRealWeather(true);
+  }
+
+  private async loadRealWeather(silent: boolean): Promise<void> {
+    const frame = this.service.frame;
+    this.realBtn.disabled = true;
+    try {
+      const wx = await fetchOpenMeteo(frame.lonDeg, frame.latDeg, frame.heightM);
+      this.service.setWindProfile(wx.profile);
+      this.service.setSeaLevelConditions(wx.seaLevelTempK, wx.seaLevelPressurePa);
+      this.profileActive = true;
+      this.realActive = true;
+      this.realBtn.classList.add('toggled');
+
+      // Resumen: niveles cargados + condiciones de la estación.
+      const mid = wx.levels.find((l) => l.hPa === 850) ?? wx.levels[0];
+      this.modeLabel.textContent =
+        `Meteo real: ${wx.levels.length} niveles (${wx.levels.map((l) => l.hPa).join('/')} hPa) · ` +
+        `${mid.hPa} hPa: ${mid.speedMS.toFixed(0)} m/s desde ${mid.fromBearingDeg.toFixed(0)}º · ` +
+        `estación ${wx.stationTempC.toFixed(1)}ºC / ${wx.stationPressureHPa.toFixed(0)} hPa`;
+      if (!silent) {
+        toast(`Meteo real instalada: ${wx.levels.length} niveles de viento`);
+      }
+      this.onChange?.();
+    } catch (err) {
+      console.error('[open-meteo]', err);
+      toast('Sin meteo real (¿red?) — sigue el modo manual');
+    } finally {
+      this.realBtn.disabled = false;
+    }
   }
 
   private slider(
@@ -92,13 +148,24 @@ export class WeatherPanel {
   }
 
   private applyWind(): void {
-    if (this.profileActive) return; // el perfil manda hasta volver a constante
+    if (this.profileActive && !this.realActive) return; // el perfil de ejemplo manda
+    if (this.realActive) {
+      // El usuario retoma el control manual: fuera modo real.
+      this.realActive = false;
+      this.profileActive = false;
+      this.realBtn.classList.remove('toggled');
+    }
     this.service.setSteadyWind(this.windSpeed, this.windBearing);
     this.modeLabel.textContent = 'Viento constante (gana con la altitud, ×2 máx).';
     this.onChange?.();
   }
 
   private applyAtmo(): void {
+    if (this.realActive) {
+      this.realActive = false;
+      this.realBtn.classList.remove('toggled');
+      this.modeLabel.textContent = 'Manual (meteo real desactivada).';
+    }
     this.service.setSeaLevelConditions(this.tempC + 273.15, this.pressureHPa * 100);
     this.onChange?.();
   }

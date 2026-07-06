@@ -25,7 +25,17 @@ clic en el globo (la dirección de tiro resuelve la elevación contra el relieve
 **Fuego** dispara; **Salva MRSI ×3** hace impactar varias rondas a la vez;
 **Comparar físicas** superpone vacío/arrastre/Coriolis/viento. El panel derecho
 controla viento (incluido un perfil con cizalladura de ejemplo), temperatura y
-presión. El **cockpit** (abajo-izquierda) afina la puntería con la rueda del ratón
+presión; **🌍 Meteo real (aquí y ahora)** instala la atmósfera de verdad de la
+posición de la batería vía [Open-Meteo](https://open-meteo.com) (gratis, sin
+clave): perfil de viento por niveles de presión 1000→200 hPa pasado a altitud
+con el modelo ISA-76 y T/P de superficie reducidas al nivel del mar; se
+re-consulta al mover la batería mientras el modo real siga activo (caché de
+15 min), y tocar cualquier control manual lo desactiva. Sin red, un toast avisa
+y el modo manual sigue intacto. El botón **📋 Tabla de tiro** (abajo-derecha)
+despliega la tabla del arma/carga/meteo vigentes — alcance → QE↓/QE↑, TOF y
+deriva —; clic en una fila apunta ahí y CSV la descarga. Con objetivo marcado
+se pinta la **elipse de error predicha** (1σ/2σ, leyenda PER): la salva
+dispersa debe caer mayoritariamente dentro. El **cockpit** (abajo-izquierda) afina la puntería con la rueda del ratón
 sobre la rosa de azimut o el cuadrante de elevación: paso 0.5º, Shift 0.05º (fino),
 Ctrl 5º (grueso); arrastrar también apunta. Cámaras: Libre / Orbital / **Seguir**
 (persigue el proyectil con bullet-time al impactar; arrastra para orbitar a su

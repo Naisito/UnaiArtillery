@@ -171,6 +171,7 @@ async function boot(): Promise<void> {
         piece.clearTarget();
         piece.schedulePreview(0);
         firingTable.notifyChanged(); // la latitud (Coriolis) cambia la tabla
+        weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
         flyToBattery(true);
         toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
       })();

@@ -177,6 +177,26 @@ export class Atmosphere {
 
   densityAt(h: number): number { return this.sample(h).density; }
 
+  /**
+   * P-PRO.2 — altitud geométrica (m) a la que ESTE modelo (con sus knobs
+   * actuales) tiene la presión `pPa`. Bisección sobre `sample().pressure`
+   * en 0–86 km (la presión es estrictamente decreciente); clamp fuera de
+   * rango. Se usa para colocar los niveles de presión de la meteo real
+   * (1000→200 hPa) en altitud.
+   */
+  altitudeForPressure(pPa: number): number {
+    let lo = 0.0;
+    let hi = 86000.0;
+    if (pPa >= this.sample(lo).pressure) return lo;
+    if (pPa <= this.sample(hi).pressure) return hi;
+    for (let i = 0; i < 60; i++) {
+      const mid = 0.5 * (lo + hi);
+      if (this.sample(mid).pressure > pPa) lo = mid;
+      else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+  }
+
   windAt(pos: Vec3, t: number): Vec3 { return this.windField(pos, t); }
 
   /**
