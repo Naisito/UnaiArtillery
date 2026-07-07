@@ -62,6 +62,36 @@ describe('P-VIVO.5 — primer cruce estructural (alturas sintéticas)', () => {
     expect(firstStructuralCrossing(flightZ, visualNaN, flatTerrain)).toBeNull();
   });
 
+  it('un MORTERO no se recorta contra lo que SOBREVUELA al subir (rama de subida)', () => {
+    // Arco de mortero: sube 0→200→0. Una grúa de 60 m en el ascenso (índice 1)
+    // queda por encima del proyectil bajo (z=30), pero el tiro la SOBREVUELA.
+    const arc = [0, 30, 120, 200, 120, 30, 0];
+    const crane = [0, 60, 0, 0, 0, 0, 0]; // grúa de 60 m en la subida
+    const flat = [0, 0, 0, 0, 0, 0, 0];
+    // Sin el filtro de ápice cruzaría en i=1 (30 < 60): explosión en el aire.
+    expect(firstStructuralCrossing(arc, crane, flat)).toBeNull();
+  });
+
+  it('el mismo arco SÍ se recorta contra el edificio del BLANCO (rama de bajada)', () => {
+    const arc = [0, 30, 120, 200, 120, 30, 0];
+    // Grúa de 60 m en la subida (i=1) + edificio de 40 m al caer sobre el
+    // blanco (i=5): solo el segundo, ya en descenso, debe recortar.
+    const visual = [0, 60, 0, 0, 0, 40, 0];
+    const flat = [0, 0, 0, 0, 0, 0, 0];
+    expect(firstStructuralCrossing(arc, visual, flat)).toBe(5);
+  });
+
+  it('NO recorta en el ÁPICE contra terreno alto mal casado con el DEM (crucero)', () => {
+    // El ápice sobrevuela una loma: las teselas (visual) suben a 695 m donde el
+    // DEM del corredor solo ve 250 m. El vuelo pasa por su punto más alto
+    // (691 m), a 441 m del suelo del corredor: SOBREVUELO de terreno, no un
+    // edificio. Antes esto "explotaba en el aire" justo en el ápice.
+    const arc =     [400, 600, 691, 600, 300, 60, 0]; // ápice en i=2
+    const visual =  [0, 0, 695, 0, 0, 0, 0];
+    const terrain = [0, 0, 250, 0, 0, 0, 0];
+    expect(firstStructuralCrossing(arc, visual, terrain)).toBeNull();
+  });
+
   it('el umbral usa el TERRENO DEL CORREDOR, no el cero: ladera con edificio', () => {
     // Corredor que sube a 30 m; visual = corredor salvo un edificio de 12 m
     // sobre la ladera en el índice 2.

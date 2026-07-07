@@ -39,6 +39,16 @@ export interface TailPoint {
 export const TAIL_2D_M = 2000;
 export const TAIL_STEP_M = 15;
 export const BUILDING_THRESHOLD_M = 3;
+/**
+ * Un edificio SOLO puede interceptar cuando el vuelo ya baja cerca del suelo.
+ * Por encima de esta altura sobre el TERRENO DEL CORREDOR, un "cruce" contra
+ * las teselas 3D no es un edificio: es terreno natural (loma, arbolado, roca)
+ * cuya altura visual supera al DEM del corredor. Sin esta guarda el tiro
+ * "explota en pleno crucero" — típicamente en el ÁPICE, el punto más alto,
+ * donde jamás hay un edificio a esa altura. (Los rascacielos se interceptan
+ * bajos, en la aproximación final: ahí el vuelo ya está muy cerca del suelo.)
+ */
+export const MAX_STRUCTURAL_CLIP_ALT_M = 200;
 
 /**
  * Submuestrea la COLA de la trayectoria: los últimos `tail2dM` metros en 2D,
@@ -76,6 +86,17 @@ export function tailSamples(
  * supera en >`thresholdM` la del terreno del corredor (edificio). Si el
  * primer cruce es contra el suelo visual (≤ umbral) no hay recorte, y un
  * muestreo INCOMPLETO (algún null/NaN) tampoco recorta nunca.
+ *
+ * SOLO se mira la RAMA DESCENDENTE (desde el ápice). Un proyectil en arco
+ * (mortero) SUBE por encima del puerto y SOBREVUELA grúas y edificios cuando
+ * aún está bajo: eso NO es impacto. El recorte solo tiene sentido cuando el
+ * tiro CAE hacia el blanco y una estructura lo intercepta. (Sin este filtro,
+ * un mortero "explota en el aire" a un cuarto de camino contra lo que sobrevuela.)
+ *
+ * Además, un cruce solo cuenta si el vuelo ya baja CERCA DEL SUELO del corredor
+ * (< MAX_STRUCTURAL_CLIP_ALT_M): a altitud de crucero —el ápice— un cruce contra
+ * las teselas 3D es terreno natural más alto que el DEM, no un edificio, y
+ * recortar ahí hace "explotar" el tiro en el aire (bug del ápice).
  */
 export function firstStructuralCrossing(
   flightZ: number[],
@@ -84,11 +105,19 @@ export function firstStructuralCrossing(
   thresholdM = BUILDING_THRESHOLD_M,
 ): number | null {
   const n = Math.min(flightZ.length, visualZ.length, terrainZ.length);
-  for (let i = 0; i < n; i++) {
+  // Ápice = punto más alto del tramo muestreado; el escaneo arranca ahí (un
+  // tiro tenso descendente tiene el ápice en i=0, así que no cambia nada).
+  let apex = 0;
+  for (let i = 1; i < n; i++) if (flightZ[i] > flightZ[apex]) apex = i;
+  for (let i = apex; i < n; i++) {
     const v = visualZ[i];
     if (v === null || !Number.isFinite(v)) return null; // incompleto: sin recorte
     if (flightZ[i] < v) {
-      return v - terrainZ[i] > thresholdM ? i : null;
+      const isBuilding = v - terrainZ[i] > thresholdM;
+      // A altitud de crucero (p.ej. el ápice) el cruce es terreno, no edificio:
+      // solo recorta si el vuelo ya baja cerca del suelo del corredor.
+      const nearGround = flightZ[i] - terrainZ[i] < MAX_STRUCTURAL_CLIP_ALT_M;
+      return isBuilding && nearGround ? i : null;
     }
   }
   return null;
