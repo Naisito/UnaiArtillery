@@ -37,6 +37,8 @@ export interface GunnerProviders {
   /** Texto de la solución actual (alcance/TOF del preview). */
   solutionText(): string;
   ring(): RangeRing | null;
+  /** P-VIVO.7 — blanco móvil con su velocidad (vector en el minimapa). */
+  movingTarget?(): { x: number; y: number; vx: number; vy: number } | null;
 }
 
 const COL = {
@@ -400,6 +402,32 @@ export class GunnerHud {
       ctx.lineTo(x, y + r);
       ctx.lineTo(x - r, y);
       ctx.closePath();
+      ctx.stroke();
+    }
+
+    // P-VIVO.7 — blanco móvil: cuadrado verde + vector de velocidad (la
+    // punta marca dónde estará en ~20 s: la lección del adelanto en el mapa).
+    const mov = this.p.movingTarget?.();
+    if (mov) {
+      const x = X(mov.x);
+      const y = Y(mov.y);
+      ctx.fillStyle = 'rgba(111, 224, 142, 0.95)';
+      ctx.fillRect(x - 3 * DPR, y - 3 * DPR, 6 * DPR, 6 * DPR);
+      const tipXv = X(mov.x + mov.vx * 20);
+      const tipYv = Y(mov.y + mov.vy * 20);
+      ctx.strokeStyle = 'rgba(111, 224, 142, 0.9)';
+      ctx.lineWidth = 1.6 * DPR;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(tipXv, tipYv);
+      ctx.stroke();
+      // Punta de flecha sencilla.
+      const ang = Math.atan2(tipYv - y, tipXv - x);
+      ctx.beginPath();
+      ctx.moveTo(tipXv, tipYv);
+      ctx.lineTo(tipXv - 5 * DPR * Math.cos(ang - 0.5), tipYv - 5 * DPR * Math.sin(ang - 0.5));
+      ctx.moveTo(tipXv, tipYv);
+      ctx.lineTo(tipXv - 5 * DPR * Math.cos(ang + 0.5), tipYv - 5 * DPR * Math.sin(ang + 0.5));
       ctx.stroke();
     }
 

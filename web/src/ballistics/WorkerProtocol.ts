@@ -18,13 +18,13 @@
 //  (serialization.test.ts) — mismo código en los tres sitios.
 // ============================================================================
 import { Atmosphere, AtmosphereModel, WindField, WindProfilePoint } from './Atmosphere';
-import { FlightResult, SolverConfig } from './BallisticsSolver';
+import { BallisticsSolver, FlightResult, SolverConfig } from './BallisticsSolver';
 import { FiringTable, generateFiringTable } from './FiringTables';
 import { Vec3 } from './Vec3';
 import { WeaponCatalog, WeaponId } from './WeaponCatalog';
 import {
   DispersionErrors, DispersionPrediction, DispersionResult, FireOrder, MrsiRound, SolveResult,
-  WeaponSystem,
+  V0Correction, WeaponSystem, v0Factor,
 } from './WeaponSystem';
 
 export interface PlainVec3 { x: number; y: number; z: number }
@@ -182,10 +182,23 @@ export type WorkerRequest =
       azimuthDeg: number;
       chargeIndex: number;
       preferHighAngle: boolean;
+      /** P-VIVO.9 — la solución debe usar la V0 efectiva. */
+      v0Correction?: V0Correction;
     })
-  | (BaseRequest & { op: 'solveMRSI'; targetRangeM: number; azimuthDeg: number; nRounds: number })
+  | (BaseRequest & {
+      op: 'solveMRSI';
+      targetRangeM: number;
+      azimuthDeg: number;
+      nRounds: number;
+      v0Correction?: V0Correction;
+    })
   | (BaseRequest & { op: 'compareTrajectories'; order: FireOrder })
-  | (BaseRequest & { op: 'approxMaxRange'; chargeIndex: number; minElStepDeg?: number })
+  | (BaseRequest & {
+      op: 'approxMaxRange';
+      chargeIndex: number;
+      minElStepDeg?: number;
+      v0Correction?: V0Correction;
+    })
   | (BaseRequest & {
       op: 'fireDispersed';
       order: FireOrder;
@@ -193,8 +206,19 @@ export type WorkerRequest =
       errors: DispersionErrors;
       seed: number;
     })
-  | (BaseRequest & { op: 'generateFiringTable'; chargeIndex: number; stepM: number })
-  | (BaseRequest & { op: 'predictDispersion'; order: FireOrder; errors: DispersionErrors });
+  | (BaseRequest & {
+      op: 'generateFiringTable';
+      chargeIndex: number;
+      stepM: number;
+      v0Correction?: V0Correction;
+    })
+  | (BaseRequest & { op: 'predictDispersion'; order: FireOrder; errors: DispersionErrors })
+  | (BaseRequest & {
+      /** P-VIVO.4 — re-integrar desde un estado arbitrario (tramo de rebote). */
+      op: 'solveFromState';
+      startPos: PlainVec3;
+      startVel: PlainVec3;
+    });
 
 /** Petición sin id (el servicio lo asigna). Omit distributivo sobre la unión. */
 export type WorkerRequestBody = WorkerRequest extends infer R
@@ -257,13 +281,15 @@ export function executeRequest(req: WorkerRequest): unknown {
     case 'solveForTarget': {
       const sr: SolveResult = fc.solveForRange(
         weapon, muzzle, req.targetRangeM, req.azimuthDeg, req.chargeIndex, req.preferHighAngle,
+        req.v0Correction,
       );
       return sr;
     }
 
     case 'solveMRSI': {
       const rounds: MrsiRound[] = fc.solveMRSI(
-        weapon, muzzle, req.targetRangeM, req.azimuthDeg, req.nRounds,
+        weapon, muzzle, req.targetRangeM, req.azimuthDeg, req.nRounds, undefined,
+        req.v0Correction,
       );
       return rounds;
     }
@@ -317,13 +343,28 @@ export function executeRequest(req: WorkerRequest): unknown {
         dt: req.cfg.dt,
         latitudeDeg: req.cfg.latitudeDeg,
         atmosphere: atmo,
+        v0Scale: v0Factor(req.v0Correction),
       });
       return table;
+    }
+
+    case 'solveFromState': {
+      // P-VIVO.4 — tramo de rebote: integra la MISMA munición desde el punto
+      // y velocidad de salida del rebote hasta el impacto final.
+      const solver = new BallisticsSolver(atmo, cfg);
+      const fr = solver.integrate(
+        weapon.round,
+        new Vec3(req.startPos.x, req.startPos.y, req.startPos.z),
+        new Vec3(req.startVel.x, req.startVel.y, req.startVel.z),
+      );
+      const every = fr.timeOfFlight > DECIMATE_ABOVE_TOF_S ? DECIMATE_EVERY : 1;
+      return decimatePath(fr, every);
     }
 
     case 'approxMaxRange': {
       const v0 = WeaponSystem.muzzleVelocity(weapon, {
         azimuthDeg: 0, elevationDeg: 45, chargeIndex: req.chargeIndex,
+        v0Correction: req.v0Correction,
       });
       const step = req.minElStepDeg ?? 5.0;
       let maxR = 0;

@@ -10,10 +10,19 @@ export type { FlightResult, TrajectorySample } from './BallisticsSolver';
 export { WGS84, EnuFrame, geodeticToEcef, somiglianaGravity } from './Geodesy';
 export { Weapon, WeaponCatalog } from './WeaponCatalog';
 export type { WeaponId, CatalogVariant, ChargeZone } from './WeaponCatalog';
-export { WeaponSystem, defaultFireOrder } from './WeaponSystem';
+export { WeaponSystem, defaultFireOrder, v0Factor, V0_TEMP_COEFF_PER_C } from './WeaponSystem';
 export type {
   FireOrder, SolveResult, DispersionErrors, DispersionResult, DispersionPrediction, MrsiRound,
+  FuzeMode, FuzeSpec, V0Correction,
 } from './WeaponSystem';
 export { DeterministicRng } from './random';
+export {
+  BURST_JITTER_SIGMA_MILS, MAX_LIVE_PROJECTILES, fireJitterS, isTracer, perturbedLay, shotTimeS,
+} from './burst';
+export type { BurstLay } from './burst';
+export {
+  MAX_RICOCHETS, RICOCHET_MAX_ANGLE_DEG, grazingAngleDeg, normalFromHeights,
+  reflectVelocity, ricochetProbability, shouldRicochet,
+} from './ricochet';
 export { generateFiringTable, firingTableCSV } from './FiringTables';
 export type { FiringTable, FiringTableRow, FiringTableOptions } from './FiringTables';

@@ -170,6 +170,14 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
 }
 #hud .cell .v.mach-super { color: var(--accent); }
 #hud canvas { width: 100%; height: 60px; margin-top: 8px; }
+/* P-VIVO.10 — fila de repetición del último vuelo */
+#hud .replay-row {
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+#hud .replay-row select { width: auto; }
+#hud .replay-row label { color: var(--dim); font-size: 12px; }
 
 /* --- Tabla de tiro (P-PRO.5) ---------------------------------------------- */
 #firingTable {
@@ -311,6 +319,30 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
   text-transform: uppercase;
 }
 
+/* --- Panel de corrección del Observador Avanzado (P-VIVO.6) ---------------- */
+#foPanel {
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 12; /* por encima del HUD de telemetría si coinciden */
+  min-width: 460px;
+}
+#foPanel .fo-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+#foPanel .fo-row label {
+  flex: 0 0 64px;
+  color: var(--dim);
+}
+#foPanel .fo-row button {
+  flex: 1;
+  padding: 4px 2px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* --- Toast de avisos ------------------------------------------------------ */
 #toast {
   position: absolute;
@@ -336,4 +368,111 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
   border: 1px solid var(--line);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* --- Tutorial guiado (P-VIVO.11) ------------------------------------------ */
+#tutorialOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none; /* la app sigue viva: el tutorial avanza AL HACER */
+}
+#tutorialOverlay .tut-highlight {
+  position: fixed;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  /* El "recorte": todo lo demás queda en penumbra. */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  transition: left 0.25s, top 0.25s, width 0.25s, height 0.25s;
+}
+#tutorialOverlay .tut-balloon {
+  position: fixed;
+  width: 300px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 12px 14px;
+  pointer-events: auto; /* el botón Saltar sí se pulsa */
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+#tutorialOverlay .tut-balloon.arrow-left::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 18px;
+  border: 8px solid transparent;
+  border-left: none;
+  border-right-color: var(--accent);
+}
+#tutorialOverlay .tut-step {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+#tutorialOverlay h3 {
+  margin: 4px 0 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+#tutorialOverlay p {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+#tutorialOverlay .tut-skip {
+  font-size: 12px;
+}
+#tutorialHelpBtn {
+  position: absolute;
+  z-index: 30;
+  top: 16px;
+  right: 292px; /* a la izquierda del panel de meteo (260px + márgenes) */
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 16px;
+}
+
+/* --- Táctil (P-VIVO.11): targets ≥40 px con puntero grueso ----------------- */
+@media (pointer: coarse) {
+  select, input[type="number"], button {
+    min-height: 40px;
+  }
+  .btn-grid button {
+    min-height: 40px;
+  }
+  input[type="range"] {
+    height: 32px;
+  }
+}
+
+/* --- Pestañas bajo 900 px (P-VIVO.11): un panel cada vez -------------------- */
+#panelTabs { display: none; }
+@media (max-width: 900px) {
+  #controlPanel, #weatherPanel, #cockpit {
+    display: none;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: calc(100vh - 84px);
+  }
+  #controlPanel.open, #weatherPanel.open, #cockpit.open { display: block; }
+  #panelTabs {
+    display: flex;
+    position: absolute;
+    z-index: 15;
+    left: 50%;
+    bottom: 8px;
+    transform: translateX(-50%);
+    gap: 6px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 6px;
+  }
+  #hud { min-width: 0; width: calc(100vw - 16px); }
+  #hud .grid { grid-template-columns: repeat(4, 1fr); }
+  #firingTable { display: none; } /* no cabe: la lección vive en escritorio */
+  #tutorialHelpBtn { right: 8px; top: 8px; } /* la meteo vive plegada en pestañas */
 }

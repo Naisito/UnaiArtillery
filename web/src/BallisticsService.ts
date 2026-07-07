@@ -17,7 +17,10 @@
 import * as Cesium from 'cesium';
 import { sampleDem } from './dem';
 import { GeoFrame } from './frame';
-import { Atmosphere, Vec3, Weapon, WeaponCatalog, WeaponId, WindProfilePoint } from './ballistics';
+import {
+  Atmosphere, DeterministicRng, MAX_RICOCHETS, Vec3, Weapon, WeaponCatalog, WeaponId,
+  WindProfilePoint, grazingAngleDeg, normalFromHeights, reflectVelocity, shouldRicochet,
+} from './ballistics';
 import type {
   DispersionErrors, DispersionPrediction, DispersionResult, FireOrder, FiringTable,
   FlightResult, MrsiRound, SolveResult, SolverConfig,
@@ -28,7 +31,7 @@ import {
   hydrateDispersion, hydrateFlightResult, windFieldOf,
 } from './ballistics/WorkerProtocol';
 
-export type { RangeRing } from './ballistics/WorkerProtocol';
+export type { RangeRing, TerrainSpec } from './ballistics/WorkerProtocol';
 
 export interface TargetSolution {
   found: boolean;
@@ -143,6 +146,7 @@ export class BallisticsService {
     this.frame = new GeoFrame(lonDeg, latDeg, h);
     this.ringCache.clear();
     this.ringInFlight.clear();
+    this.waterCache.clear(); // P-VIVO.4 — las celdas eran ENU de la posición vieja
   }
 
   /** Arma con la munición seleccionada ya aplicada (P-PRO.4). */
@@ -281,6 +285,167 @@ export class BallisticsService {
     };
   }
 
+  // -- P-VIVO.4 — superficies: agua y rebotes rasantes -------------------------
+
+  /** ¿Hay una fuente REAL de alturas? (elipsoide pelado = no se clasifica). */
+  hasRealTerrain(): boolean {
+    return (
+      !(this.viewer.terrainProvider instanceof Cesium.EllipsoidTerrainProvider) ||
+      !!this.tilesetGround?.show
+    );
+  }
+
+  private readonly waterCache = new Map<string, boolean>();
+
+  /**
+   * P-VIVO.4 — clasificación de superficie: un impacto es AGUA si la altura
+   * muestreada del terreno en el punto es < 0.5 m — el océano es 0 exacto
+   * tanto en Cesium World Terrain como en el DEM Copernicus. LIMITACIÓN
+   * HONESTA (documentada): lagos y ríos interiores NO se detectan (están por
+   * encima de 0 m). Sin fuente real de terreno devuelve false. Caché por
+   * celda de 50 m: una ráfaga sobre el mar no re-muestrea por bala.
+   */
+  async isLikelyWater(enu: Vec3): Promise<boolean> {
+    if (!this.hasRealTerrain()) return false;
+    const key = `${Math.round(enu.x / 50)}:${Math.round(enu.y / 50)}`;
+    const hit = this.waterCache.get(key);
+    if (hit !== undefined) return hit;
+    try {
+      const carto = this.frame.cartographicOfEnu(new Vec3(enu.x, enu.y, 0));
+      const [h] = await this.sampleHeights([carto]);
+      const water = h < 0.5;
+      if (this.waterCache.size > 256) this.waterCache.clear();
+      this.waterCache.set(key, water);
+      return water;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * P-VIVO.5 — alturas del TERRENO (sin edificios) en varios puntos ENU,
+   * RELATIVAS a la muestra de la propia batería: el dátum de la fuente (DEM
+   * MSL vs terreno/teselas elipsoidales) se cancela, igual que en el
+   * corredor de tiro. Comparable 1:1 con las alturas visuales del tileset
+   * (cuyo marco también ancla la batería en z=0).
+   */
+  async terrainZRelative(pts: Vec3[]): Promise<number[]> {
+    const cartos = [
+      this.frame.cartographicOfEnu(new Vec3(0, 0, 0)),
+      ...pts.map((p) => this.frame.cartographicOfEnu(new Vec3(p.x, p.y, 0))),
+    ];
+    const heights = await this.sampleHeights(cartos);
+    const ref = heights[0];
+    return pts.map((_, i) => heights[i + 1] - ref);
+  }
+
+  /** Tres alturas z ENU alrededor de un punto (para la normal del terreno). */
+  private async groundPatch(
+    enu: Vec3, epsM: number,
+  ): Promise<{ z0: number; zx: number; zy: number }> {
+    const cartos = [
+      this.frame.cartographicOfEnu(new Vec3(enu.x, enu.y, 0)),
+      this.frame.cartographicOfEnu(new Vec3(enu.x + epsM, enu.y, 0)),
+      this.frame.cartographicOfEnu(new Vec3(enu.x, enu.y + epsM, 0)),
+    ];
+    const [h0, hx, hy] = await this.sampleHeights(cartos);
+    return { z0: h0 - this.frame.heightM, zx: hx - this.frame.heightM, zy: hy - this.frame.heightM };
+  }
+
+  /** P-VIVO.4 — re-integra la munición desde un estado arbitrario (rebote). */
+  async solveFromState(
+    id: WeaponId,
+    startPos: Vec3,
+    startVel: Vec3,
+    terrain: TerrainSpec,
+  ): Promise<FlightResult> {
+    const raw = await this.call<FlightResult>({
+      op: 'solveFromState',
+      weaponId: id,
+      roundIndex: this.roundIndex,
+      startPos,
+      startVel,
+      muzzle: this.muzzleEnu,
+      atmo: this.atmoSpec(),
+      cfg: this.makeConfigSpec({ maxFlight: 120 }),
+      terrain,
+    });
+    return hydrateFlightResult(raw);
+  }
+
+  /**
+   * P-VIVO.4 — tiro de arma ligera con rebotes rasantes encadenados: resuelve
+   * el tramo balístico y, si el impacto es AGUA con ángulo de caída < 12º,
+   * refleja la velocidad (ricochet.ts, RNG determinista sembrado por disparo)
+   * y RE-INTEGRA el tramo siguiente en el worker. Máximo 2 rebotes. Devuelve
+   * los tramos en orden; el presentador los encadena sin costura.
+   * En tierra (o sin fuente real de terreno) el resultado es EXACTAMENTE el
+   * de solveTrajectory: un solo tramo.
+   */
+  async solveWithRicochets(
+    id: WeaponId,
+    order: FireOrder,
+    seed: number,
+    presampledTerrain?: TerrainSpec,
+  ): Promise<FlightResult[]> {
+    const weapon = this.weapon(id);
+    let terrain = presampledTerrain ?? null;
+    if (!terrain && weapon.category === 'SmallArms' && this.hasRealTerrain()) {
+      // Un corredor para TODOS los tramos (los rebotes se quedan en la banda).
+      const ring = await this.approxMaxRange(id, order.chargeIndex);
+      terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, 1000);
+    }
+    const first = await this.solveTrajectory(
+      id, order, undefined, {}, undefined, terrain ?? undefined,
+    );
+    const segments: FlightResult[] = [first];
+    if (weapon.category !== 'SmallArms' || !this.hasRealTerrain() || !terrain) return segments;
+
+    const rng = new DeterministicRng(seed);
+    let current = first;
+    for (let n = 0; n < MAX_RICOCHETS; n++) {
+      if (!current.impacted || current.detonation !== 'ground' || current.path.length < 2) break;
+      const impact = current.impactPoint;
+      if (!(await this.isLikelyWater(impact))) break; // en tierra nada cambia
+      const patch = await this.groundPatch(impact, 12);
+      const normal = normalFromHeights(patch.z0, patch.zx, patch.zy, 12);
+      const vIn = current.path[current.path.length - 1].velocity;
+      const angle = grazingAngleDeg(vIn, normal);
+      if (!shouldRicochet(angle, rng)) break;
+      const vOut = reflectVelocity(vIn, normal, rng);
+      current = await this.solveFromState(
+        id,
+        new Vec3(impact.x, impact.y, impact.z + 0.05), // despegado del plano
+        new Vec3(vOut.x, vOut.y, vOut.z),
+        terrain,
+      );
+      segments.push(current);
+    }
+    return segments;
+  }
+
+  /**
+   * P-VIVO.6 — perfil de alturas z ENU a lo largo de la recta A→B (ambos en
+   * ENU), equiespaciado. Para validar LÍNEA DE VISIÓN del puesto de
+   * observación y para pegar blancos móviles al suelo (P-VIVO.7). Usa la
+   * misma cascada de terreno que el corredor (CWT → DEM → plano), y como el
+   * dátum desplaza TODAS las muestras por igual, la forma relativa — lo único
+   * que la LOS necesita — es invariante.
+   */
+  async sampleLineProfile(aEnu: Vec3, bEnu: Vec3, stepM = 120): Promise<number[]> {
+    const dx = bEnu.x - aEnu.x;
+    const dy = bEnu.y - aEnu.y;
+    const len = Math.hypot(dx, dy);
+    const n = Math.max(2, Math.min(96, Math.ceil(len / Math.max(30, stepM)) + 1));
+    const cartos: Cesium.Cartographic[] = [];
+    for (let i = 0; i < n; i++) {
+      const f = i / (n - 1);
+      cartos.push(this.frame.cartographicOfEnu(new Vec3(aEnu.x + dx * f, aEnu.y + dy * f, 0)));
+    }
+    const heights = await this.sampleHeights(cartos);
+    return heights.map((h) => h - this.frame.heightM);
+  }
+
   // -- Tiro y dirección de fuego ---------------------------------------------
   /** Alcance máximo aproximado de un arma+carga (para corredor y anillos). */
   approxMaxRange(id: WeaponId, chargeIndex: number): Promise<RangeRing> {
@@ -311,6 +476,9 @@ export class BallisticsService {
    * Vuela un tiro completo contra el relieve real. `targetEnu` activa el
    * guiado Pro-Nav en municiones guiadas (GMLRS/misil). `lane` agrupa solves
    * reemplazables (preview): uno nuevo cancela al anterior pendiente.
+   * `presampledTerrain` (P-VIVO.2) reutiliza un corredor ya muestreado: una
+   * ráfaga de 9 disparos/s no debe re-muestrear el DEM por bala (el rebufo
+   * mueve el rumbo ±0.15º y la banda 2D resuelve el desvío lateral igual).
    */
   async solveTrajectory(
     id: WeaponId,
@@ -318,6 +486,7 @@ export class BallisticsService {
     targetEnu?: Vec3,
     overrides: Partial<SolverConfig> = {},
     lane?: string,
+    presampledTerrain?: TerrainSpec,
   ): Promise<FlightResult> {
     const ring = await this.approxMaxRange(id, order.chargeIndex);
     // Objetivo guiado desplazado del eje: ensancha la banda hasta cubrirlo.
@@ -329,7 +498,9 @@ export class BallisticsService {
       const lateral = Math.abs(dE * Math.cos(az) - dN * Math.sin(az));
       halfWidthM = Math.max(2000, lateral * 1.25);
     }
-    const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, halfWidthM);
+    const terrain =
+      presampledTerrain ??
+      (await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, halfWidthM));
     // Misil de largo alcance: integra sobre Tierra esférica (P1.4, >50 km).
     const spherical = ring.maxRangeM > 50_000;
     const { terrainHeight: _t, gravity: _g, ...plainOverrides } = overrides;

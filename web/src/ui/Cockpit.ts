@@ -102,7 +102,10 @@ export class Cockpit {
       const az = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
       this.applyAim(az, this.panel.elevationDeg);
     };
-    this.bindDrag(c, aimFromPointer);
+    // P-VIVO.11 — dos dedos = ajuste FINO relativo (el Shift del táctil).
+    this.bindDrag(c, aimFromPointer, (dxPx) => {
+      this.applyAim(this.panel.azimuthDeg + dxPx * 0.02, this.panel.elevationDeg);
+    });
   }
 
   private bindElevation(): void {
@@ -128,21 +131,39 @@ export class Cockpit {
       const el = (Math.atan2(dy, Math.max(1e-6, dx)) * 180) / Math.PI;
       this.applyAim(this.panel.azimuthDeg, el);
     };
-    this.bindDrag(c, aimFromPointer);
+    // P-VIVO.11 — dos dedos = ajuste FINO relativo de la QE.
+    this.bindDrag(c, aimFromPointer, (_dxPx, dyPx) => {
+      this.applyAim(this.panel.azimuthDeg, this.panel.elevationDeg - dyPx * 0.02);
+    });
   }
 
-  private bindDrag(c: HTMLCanvasElement, move: (ev: PointerEvent) => void): void {
-    let dragging = false;
+  /**
+   * Arrastre con Pointer Events (ratón Y dedo: setPointerCapture +
+   * touch-action:none en CSS). P-VIVO.11: con DOS punteros activos el
+   * movimiento pasa a `fineMove` (ajuste relativo suave, el "Shift" táctil).
+   */
+  private bindDrag(
+    c: HTMLCanvasElement,
+    move: (ev: PointerEvent) => void,
+    fineMove?: (dxPx: number, dyPx: number) => void,
+  ): void {
+    const active = new Map<number, { x: number; y: number }>();
     c.addEventListener('pointerdown', (ev) => {
-      dragging = true;
       c.setPointerCapture(ev.pointerId);
-      move(ev);
+      active.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (active.size === 1) move(ev);
     });
     c.addEventListener('pointermove', (ev) => {
-      if (dragging) move(ev);
+      const prev = active.get(ev.pointerId);
+      if (!prev) return;
+      const dx = ev.clientX - prev.x;
+      const dy = ev.clientY - prev.y;
+      active.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      if (active.size >= 2) fineMove?.(dx, dy);
+      else move(ev);
     });
     const stop = (ev: PointerEvent) => {
-      dragging = false;
+      active.delete(ev.pointerId);
       if (c.hasPointerCapture(ev.pointerId)) c.releasePointerCapture(ev.pointerId);
     };
     c.addEventListener('pointerup', stop);

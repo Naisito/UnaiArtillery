@@ -43,6 +43,11 @@ export interface FiringTableOptions {
   /** Latitude for Coriolis. Default 40. */
   latitudeDeg?: number;
   atmosphere?: Atmosphere;
+  /**
+   * P-VIVO.9 — factor multiplicativo sobre la V0 de la carga (temperatura de
+   * carga, desgaste, sesgo del radar). Default 1 (bit a bit lo de siempre).
+   */
+  v0Scale?: number;
 }
 
 export interface FiringTable {
@@ -65,7 +70,9 @@ export function generateFiringTable(
     latitudeDeg: opts.latitudeDeg ?? 40.0,
   });
   const solver = new BallisticsSolver(atmo, cfg);
-  const v0 = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
+  const scale = opts.v0Scale ?? 1.0;
+  const v0Base = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
+  const v0 = scale === 1.0 ? v0Base : v0Base * scale; // V0 efectiva (P-VIVO.9)
 
   // Fire due North so "drift" reads directly as the East (+x) miss component.
   const fireAt = (elDeg: number): FlightResult => {

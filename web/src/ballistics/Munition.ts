@@ -130,6 +130,13 @@ export class Munition {
   // -- Warhead / payload (drives VFX & camera shake, not trajectory) ----------
   warheadMassTNTeq = 6.6; // kg TNT-equivalent for explosion scaling
   fuzeDelay = 0.0;        // s after impact (0 = point detonation)
+  /**
+   * P-VIVO.8 — carga de misión: 'he' explota (default), 'illum' despliega
+   * una bengala con paracaídas al detonar la espoleta de tiempo y 'smoke'
+   * levanta una cortina persistente al impactar. SOLO presentación: la
+   * trayectoria integra la misma masa/BC.
+   */
+  payload: 'he' | 'illum' | 'smoke' = 'he';
 
   /** Cross-sectional reference area A = pi * (d/2)^2. */
   referenceArea(): number {

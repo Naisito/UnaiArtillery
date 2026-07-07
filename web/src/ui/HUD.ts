@@ -24,6 +24,9 @@ interface CellMap {
 }
 
 export class HUD {
+  /** P-VIVO.10 — "↺ Repetir" el último vuelo (main lo conecta a la pieza). */
+  onReplay?: (camera: 'follow' | 'cabin' | 'drone', slow: boolean) => void;
+
   private readonly el = document.getElementById('hud')!;
   private cells = {} as CellMap;
   private canvas!: HTMLCanvasElement;
@@ -49,6 +52,29 @@ export class HUD {
     this.canvas.width = 640;
     this.canvas.height = 72;
     this.el.append(grid, this.canvas);
+
+    // P-VIVO.10 — repetición: cámara rápida + ×0.25 (bullet-time sostenido).
+    const replayRow = document.createElement('div');
+    replayRow.className = 'row replay-row';
+    const replayBtn = document.createElement('button');
+    replayBtn.textContent = '↺ Repetir';
+    replayBtn.title = 'Re-reproduce el último vuelo (mismo camino, sin cráter nuevo)';
+    const camSel = document.createElement('select');
+    for (const [v, label] of [['follow', 'Seguir'], ['cabin', 'Cabina'], ['drone', 'Dron']] as const) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = label;
+      camSel.appendChild(opt);
+    }
+    const slowLab = document.createElement('label');
+    const slow = document.createElement('input');
+    slow.type = 'checkbox';
+    slowLab.append(slow, document.createTextNode(' ×0.25'));
+    slowLab.title = 'Toda la repetición a cámara lenta';
+    replayBtn.onclick = () =>
+      this.onReplay?.(camSel.value as 'follow' | 'cabin' | 'drone', slow.checked);
+    replayRow.append(replayBtn, camSel, slowLab);
+    this.el.appendChild(replayRow);
   }
 
   show(flight: FlightResult): void {

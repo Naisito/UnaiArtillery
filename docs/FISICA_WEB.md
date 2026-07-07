@@ -243,6 +243,101 @@ tramo (≈40× menos integraciones que resolver fila a fila) y emite CSV:
 alcance → QE baja/alta, TOF, velocidad de impacto y deriva (spin+Coriolis+viento).
 CLI: `npm run firing-table -- <arma> <carga> <paso_m>`.
 
+## Audio posicional y silbido terminal (P-VIVO.1)
+
+Todo el cálculo escalar del paisaje sonoro vive en `vfx/audioMath.ts` (puro, con
+test); `AudioBoom` solo aplica los números a su grafo WebAudio (voces →
+`StereoPannerNode` → `masterGain` → `DynamicsCompressorNode` → salida):
+
+- **Retardo físico**: `t = distancia / a(h)` con la velocidad del sonido real de
+  la atmósfera del servicio (suelo de 200 m/s y mínimo de 10 ms para el
+  scheduler). A 3 km el boom llega ~9 s tarde.
+- **Pan estéreo**: `pan = sin(acimut_evento − heading_cámara)`. Un impacto a tu
+  derecha suena a la derecha y al orbitar la cámara el paisaje gira contigo.
+  *Límite honesto*: con dos altavoces no hay delante/detrás — un evento a la
+  espalda panea igual que uno de frente (pan 0).
+- **Silbido terminal**: el silbido de las bombas es la fase terminal
+  SUBSÓNICA — el modelo lo anula por encima de Mach 1 (un GMLRS supersónico
+  no silba; los morteros sí) y más allá de 500 m de la cámara; la ganancia
+  crece cuadrática al acercarse y la frecuencia central cae de ~1200 Hz
+  (M≈1) a ~600 Hz (M≈0.3), el "descenso" clásico. Es un modelo perceptual,
+  no aeroacústica: la frecuencia real depende de la geometría del proyectil.
+
+## Ráfagas de armas automáticas (P-VIVO.2)
+
+`ballistics/burst.ts` (puro, con test): timestamps `tᵢ = i·60/rpm` (M240 750 rpm,
+M2 550 rpm ≈ 9 disparos/s), 1 trazadora cada `tracerEvery = 5` balas y **rebufo**
+por bala como gaussiana de σ = 2.5 mils en acimut y elevación con el MISMO
+mulberry32 determinista de la dispersión (semilla por ráfaga: ráfaga
+reproducible). Cada bala se integra completa en el worker contra el corredor
+muestreado UNA vez por ráfaga (el rebufo mueve el rumbo ±0.15°, dentro de la
+banda 2D). Tope de 24 proyectiles simultáneos en vuelo (FIFO silencioso). La
+trazadora es solo VFX (línea aditiva que se consume a los ~3.5 s); la letalidad
+no se simula.
+
+## Superficies: agua y rebotes rasantes (P-VIVO.4)
+
+- **Clasificación de superficie**: un impacto es AGUA si la altura muestreada
+  del terreno en el punto es **< 0.5 m** — el océano es 0 exacto tanto en
+  Cesium World Terrain como en el DEM Copernicus GLO-90. LIMITACIÓN HONESTA:
+  **lagos y ríos interiores NO se detectan** (están por encima de 0 m), y sin
+  fuente real de alturas (modo OSM sin edificios) no se clasifica nada. El
+  agua responde como agua: columna + anillos + spray, boom ahogado
+  (lowpass ~110 Hz, ataque blando) y NI cráter NI quemadura.
+- **Rebote rasante** (`ballistics/ricochet.ts`, puro y testeado): SOLO
+  municiones sin explosivo (armas ligeras) y SOLO sobre agua — en tierra nada
+  cambia. Si el ángulo de caída respecto al PLANO LOCAL (normal por
+  diferencias finitas sobre 3 muestras) es < 12°, la bala rebota con
+  `p = 1 − ángulo/12°` (RNG determinista mulberry32 sembrado por disparo):
+  reflexión especular con restitución 0.55 tangencial / 0.3 normal (la
+  energía SIEMPRE decrece) y desvío aleatorio ±3° girando alrededor de la
+  normal. El tramo restante se **RE-INTEGRA en el worker** (op
+  `solveFromState`) contra el mismo corredor, hasta 2 rebotes. Umbrales
+  elegidos del orden de los datos empíricos clásicos de rebote sobre agua
+  (ángulo crítico ~7-15° según forma y velocidad); es un modelo de una sola
+  constante, no hidrodinámica.
+
+## Impacto contra los edificios 3D (P-VIVO.5)
+
+Los Photorealistic 3D Tiles siguen SIN existir para la integración — esto es
+un **recorte de presentación** (`BuildingHit.ts`): al empezar cada vuelo se
+pre-muestrea la cola de la trayectoria (últimos ~2 km, cada ~15 m) contra el
+suelo VISUAL (`scene.sampleHeightMostDetailed`, un lote) y contra el terreno
+del corredor (alturas RELATIVAS a la batería: el dátum DEM-MSL vs
+teselas-elipsoidales se cancela). El primer punto de vuelo por debajo del
+visual con `visual − terreno > 3 m` es EDIFICIO: la reproducción se corta ahí
+(bola de fuego + humo, sin cráter) y el fallo del reto usa el punto recortado.
+Muestreo incompleto o sin tileset = comportamiento clásico. En ráfaga solo se
+muestrean las trazadoras (1/5): coste GPU.
+
+## Bengala ILLUM y cortina SMOKE (P-VIVO.8)
+
+- **ILLUM**: espoleta de tiempo forzada (TOF del preview − 0.5 s); al detonar no
+  hay explosión — se despliega una bengala cuya cinemática es PURA y testeada
+  (`vfx/flare.ts`): desciende bajo paracaídas a **4.5 m/s** y deriva integrando
+  el viento REAL de la altitud que va cruzando (perfil inyectado, paso 0.25 s),
+  con ~50 s de vida y fundido final. *Truco documentado*: la `PointLight` de
+  Three NO ilumina el globo de Cesium (pipelines de materiales separados) —
+  ilumina los objetos Three (cañón, camión, cráteres) y el suelo se "vende"
+  con un disco de luz falso (sprite aditivo suave que sigue a la bengala).
+- **SMOKE**: al impactar, sin explosión ni cráter: cortina de nubes persistentes
+  (~90 s, re-alimentadas cada ~7 s) en línea perpendicular al rumbo de llegada
+  que deriva con el viento de superficie (la relajación exponencial del
+  PuffCloud hacia el viento local). El bloqueo de visión es VISUAL — no hay
+  lógica de oclusión para la IA porque no hay IA.
+- Ambas municiones vuelan con la aerodinámica de su clase (BC G7/G1 similares a
+  la HE del calibre); el `payload` solo cambia la presentación al detonar.
+
+## Blanco móvil y tiro predicho (P-VIVO.7)
+
+`MovingTarget.ts`: propagación PURA con rumbo y velocidad constantes
+(`positionAt(t)`, testeada), re-anclaje sin teleporte al salirse del anillo
+jugable y altura del camino interpolada sobre muestras pre-consultadas por
+delante (cascada DEM/terreno, lotes de 3 km cada 40 m). El **fantasma de
+adelanto** es la posición extrapolada al TOF del preview vigente: apuntarle
+acierta si el TOF no cambia al re-apuntar — iterar 2-3 veces converge, que es
+exactamente la lección del tiro predicho (`lead = v·TOF`).
+
 ## Paridad con el núcleo C++ (P-WEB.1)
 
 Con las funciones nuevas desactivadas (su valor por defecto) la integración TS es

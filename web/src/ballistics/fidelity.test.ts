@@ -273,12 +273,17 @@ describe('P-PRO.4 — base bleed y cohete auxiliar (RAP)', () => {
     expect(rRAP).toBeLessThan(30000 * 1.2);
 
     // Y ambas están cableadas como munición seleccionable en los dos L39.
+    // (P-VIVO.8 añade ILLUM/SMOKE al M777 tras ellas: por eso ≥3, no ==3.)
     for (const w of [WeaponCatalog.m777(), WeaponCatalog.m109Paladin()]) {
-      expect(w.rounds?.length).toBe(3);
+      expect(w.rounds?.length).toBeGreaterThanOrEqual(3);
       expect(w.rounds?.[0].name).toBe(w.round.name);
       expect(w.rounds?.[1].baseBleed.enabled).toBe(true);
       expect(w.rounds?.[2].motor.ignitionDelayS).toBeGreaterThan(0);
     }
+    // P-VIVO.8 — las rondas de misión del M777 declaran su carga útil.
+    const m777rounds = WeaponCatalog.m777().rounds!;
+    expect(m777rounds.some((r) => r.payload === 'illum')).toBe(true);
+    expect(m777rounds.some((r) => r.payload === 'smoke')).toBe(true);
   });
 });
 

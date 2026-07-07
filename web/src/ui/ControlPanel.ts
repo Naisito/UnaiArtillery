@@ -16,6 +16,9 @@ export interface ControlCallbacks {
   /** P-PRO.5 — cambio de carga (la tabla de tiro depende de ella). */
   onChargeChanged(): void;
   onFire(): void;
+  /** P-VIVO.2 — armas automáticas: MANTENER pulsa/suelta la ráfaga. */
+  onBurstStart(): void;
+  onBurstEnd(): void;
   onMRSI(rounds: number): void;
   onCompare(): void;
   /** P-NEXT.7 — salva dispersa (zona batida) y limpieza de cráteres. */
@@ -28,6 +31,14 @@ export interface ControlCallbacks {
   onGoogleTiles(active: boolean): void;
   /** Ocultar la parábola de preview (modo inmersión: solo el proyectil). */
   onToggleArc(visible: boolean): void;
+  /** P-VIVO.1 — volumen master (0-100) y mute (persisten en AudioBoom). */
+  onVolumeChanged(volume: number): void;
+  onMuteChanged(muted: boolean): void;
+  /** P-VIVO.8 — noche real de Cesium (medianoche local de la batería). */
+  onNight(active: boolean): void;
+  /** P-VIVO.10 — compartir el escenario por URL / borrar la sesión guardada. */
+  onShare(): void;
+  onResetSession(): void;
 }
 
 const WEAPON_LABELS: Record<WeaponId, string> = {
@@ -71,6 +82,7 @@ export class ControlPanel {
   elevationDeg = 45;
   preferHighAngle = false;
 
+  private weaponSel!: HTMLSelectElement;
   private roundSelect!: HTMLSelectElement;
   private chargeSelect!: HTMLSelectElement;
   private azInput!: HTMLInputElement;
@@ -83,6 +95,14 @@ export class ControlPanel {
   private pickBtn!: HTMLButtonElement;
   private batteryBtn!: HTMLButtonElement;
   private googleBtn!: HTMLButtonElement;
+  private muteBtn!: HTMLButtonElement;
+  private volInput!: HTMLInputElement;
+  private nightBtn!: HTMLButtonElement;
+  private arcCheckbox!: HTMLInputElement;
+  private highCheckbox!: HTMLInputElement;
+  /** P-VIVO.8 — estado del toggle de noche (lo lee shareState). */
+  nightActive = false;
+  private bursting = false; // P-VIVO.2 — botón FUEGO mantenido
   private cameraBtns = new Map<CameraMode, HTMLButtonElement>();
 
   constructor(private readonly cb: ControlCallbacks) {
@@ -95,6 +115,9 @@ export class ControlPanel {
 
     // -- Arma y carga --------------------------------------------------------
     const weaponSel = document.createElement('select');
+    weaponSel.id = 'weaponSelect'; // ancla del tutorial (P-VIVO.11)
+    weaponSel.setAttribute('aria-label', 'Arma');
+    this.weaponSel = weaponSel;
     for (const group of WEAPON_GROUPS) {
       const og = document.createElement('optgroup');
       og.label = group.label;
@@ -176,13 +199,13 @@ export class ControlPanel {
     highRow.className = 'row';
     const highLab = document.createElement('label');
     highLab.textContent = 'Rama alta (morterazo)';
-    const high = document.createElement('input');
-    high.type = 'checkbox';
-    high.onchange = () => {
-      this.preferHighAngle = high.checked;
+    this.highCheckbox = document.createElement('input');
+    this.highCheckbox.type = 'checkbox';
+    this.highCheckbox.onchange = () => {
+      this.preferHighAngle = this.highCheckbox.checked;
       this.cb.onAimChanged();
     };
-    highRow.append(highLab, high);
+    highRow.append(highLab, this.highCheckbox);
     el.appendChild(highRow);
 
     const arcRow = document.createElement('div');
@@ -190,11 +213,11 @@ export class ControlPanel {
     const arcLab = document.createElement('label');
     arcLab.textContent = 'Parábola (preview)';
     arcLab.title = 'Desmárcalo para ver solo el proyectil en vuelo, sin el arco previsto';
-    const arc = document.createElement('input');
-    arc.type = 'checkbox';
-    arc.checked = true;
-    arc.onchange = () => this.cb.onToggleArc(arc.checked);
-    arcRow.append(arcLab, arc);
+    this.arcCheckbox = document.createElement('input');
+    this.arcCheckbox.type = 'checkbox';
+    this.arcCheckbox.checked = true;
+    this.arcCheckbox.onchange = () => this.cb.onToggleArc(this.arcCheckbox.checked);
+    arcRow.append(arcLab, this.arcCheckbox);
     el.appendChild(arcRow);
 
     // -- Acciones ------------------------------------------------------------
@@ -202,7 +225,9 @@ export class ControlPanel {
     grid.className = 'btn-grid';
 
     this.pickBtn = document.createElement('button');
+    this.pickBtn.id = 'pickTargetBtn'; // ancla del tutorial (P-VIVO.11)
     this.pickBtn.textContent = '🎯 Objetivo (clic)';
+    this.pickBtn.setAttribute('aria-label', 'Marcar objetivo con clic en el globo');
     this.pickBtn.onclick = () => {
       const active = !this.pickBtn.classList.contains('toggled');
       this.setPickActive(active);
@@ -212,6 +237,7 @@ export class ControlPanel {
 
     this.batteryBtn = document.createElement('button');
     this.batteryBtn.textContent = '📍 Mover batería';
+    this.batteryBtn.setAttribute('aria-label', 'Mover la batería con clic en el globo');
     this.batteryBtn.onclick = () => {
       const active = !this.batteryBtn.classList.contains('toggled');
       this.setBatteryActive(active);
@@ -230,6 +256,7 @@ export class ControlPanel {
     compare.onclick = () => this.cb.onCompare();
 
     const disperse = document.createElement('button');
+    disperse.id = 'disperseBtn'; // ancla del tutorial (P-VIVO.11)
     disperse.textContent = 'Salva dispersa ×6';
     disperse.title =
       'Seis tiros con errores realistas (σ V0, puntería, viento): los cráteres dibujan la elipse';
@@ -244,10 +271,57 @@ export class ControlPanel {
     el.appendChild(grid);
 
     this.fireBtn = document.createElement('button');
+    this.fireBtn.id = 'fireBtn'; // ancla del tutorial (P-VIVO.11)
     this.fireBtn.className = 'fire';
     this.fireBtn.textContent = 'Fuego';
-    this.fireBtn.onclick = () => this.cb.onFire();
+    // P-VIVO.2 — con cadencia definida el botón pasa a MANTENER: pointerdown
+    // abre la ráfaga y pointerup/cancel la corta al instante. El click de las
+    // armas clásicas sigue siendo tiro a tiro.
+    this.fireBtn.onclick = () => {
+      if (!this.weapon().rateOfFireRpm) this.cb.onFire();
+    };
+    this.fireBtn.addEventListener('pointerdown', (ev) => {
+      if (!this.weapon().rateOfFireRpm) return;
+      this.fireBtn.setPointerCapture(ev.pointerId);
+      this.bursting = true;
+      this.cb.onBurstStart();
+    });
+    const stopBurst = (ev: PointerEvent) => {
+      if (!this.bursting) return;
+      this.bursting = false;
+      if (this.fireBtn.hasPointerCapture(ev.pointerId)) {
+        this.fireBtn.releasePointerCapture(ev.pointerId);
+      }
+      this.cb.onBurstEnd();
+    };
+    this.fireBtn.addEventListener('pointerup', stopBurst);
+    this.fireBtn.addEventListener('pointercancel', stopBurst);
     el.appendChild(this.fireBtn);
+
+    // P-VIVO.1 — volumen master + mute (persisten vía AudioBoom).
+    const audioRow = document.createElement('div');
+    audioRow.className = 'row';
+    this.muteBtn = document.createElement('button');
+    this.muteBtn.textContent = '🔊';
+    this.muteBtn.title = 'Silenciar / restaurar el audio';
+    this.muteBtn.setAttribute('aria-label', 'Silenciar audio');
+    this.muteBtn.onclick = () => {
+      const muted = !this.muteBtn.classList.contains('toggled');
+      this.muteBtn.classList.toggle('toggled', muted);
+      this.muteBtn.textContent = muted ? '🔇' : '🔊';
+      this.cb.onMuteChanged(muted);
+    };
+    this.volInput = document.createElement('input');
+    this.volInput.type = 'range';
+    this.volInput.min = '0';
+    this.volInput.max = '100';
+    this.volInput.step = '1';
+    this.volInput.value = '80';
+    this.volInput.title = 'Volumen master';
+    this.volInput.setAttribute('aria-label', 'Volumen master');
+    this.volInput.oninput = () => this.cb.onVolumeChanged(Number(this.volInput.value));
+    audioRow.append(this.muteBtn, this.volInput);
+    el.appendChild(audioRow);
 
     this.solutionEl = document.createElement('p');
     this.solutionEl.className = 'hint readout';
@@ -283,12 +357,17 @@ export class ControlPanel {
       this.cameraBtns.set(mode, b);
       camGrid.appendChild(b);
     }
+    // P-VIVO.11 — sin pointer lock (tablets) la 1ª persona no tiene sentido.
+    if (!('requestPointerLock' in HTMLElement.prototype)) {
+      this.cameraBtns.get('fps')!.style.display = 'none';
+    }
     el.appendChild(camGrid);
     this.markCamera('free');
 
     // -- Mapa (P-NEXT.3) -------------------------------------------------------
     this.googleBtn = document.createElement('button');
     this.googleBtn.className = 'wide';
+    this.googleBtn.setAttribute('aria-label', 'Edificios 3D fotorrealistas de Google');
     this.googleBtn.textContent = '🏙 Edificios 3D (Google)';
     this.googleBtn.title =
       'Photorealistic 3D Tiles: ciudades reales. Solo visual — los impactos se calculan contra el terreno.';
@@ -298,6 +377,33 @@ export class ControlPanel {
       this.cb.onGoogleTiles(!this.googleBtn.classList.contains('toggled'));
     el.appendChild(this.googleBtn);
 
+    // P-VIVO.8 — noche real: medianoche local de la batería + luna.
+    this.nightBtn = document.createElement('button');
+    this.nightBtn.className = 'wide';
+    this.nightBtn.textContent = '🌙 Noche';
+    this.nightBtn.title =
+      'Medianoche local en la batería: fogonazos que deslumbran, trazadoras gloriosas y bengalas ILLUM';
+    this.nightBtn.style.width = '100%';
+    this.nightBtn.style.marginTop = '6px';
+    this.nightBtn.onclick = () => this.setNight(!this.nightActive, true);
+    el.appendChild(this.nightBtn);
+
+    // P-VIVO.10 — compartir el escenario por URL + restablecer sesión.
+    const shareRow = document.createElement('div');
+    shareRow.className = 'btn-grid';
+    shareRow.style.marginTop = '6px';
+    const shareBtn = document.createElement('button');
+    shareBtn.textContent = '🔗 Compartir';
+    shareBtn.title =
+      'Copia una URL que reconstruye este escenario: batería, arma, meteo, puntería y objetivo';
+    shareBtn.onclick = () => this.cb.onShare();
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Restablecer';
+    resetBtn.title = 'Borra la sesión guardada (la próxima carga arranca de fábrica)';
+    resetBtn.onclick = () => this.cb.onResetSession();
+    shareRow.append(shareBtn, resetBtn);
+    el.appendChild(shareRow);
+
     this.rebuildRounds();
     this.rebuildCharges();
     this.applyWeaponLimits();
@@ -306,6 +412,65 @@ export class ControlPanel {
   /** Refleja el estado REAL de los edificios 3D (la carga puede fallar). */
   setGoogleTiles(on: boolean): void {
     this.googleBtn.classList.toggle('toggled', on);
+  }
+
+  /** P-VIVO.1 — refleja el estado persistido del audio (lo posee AudioBoom). */
+  setAudioState(volume: number, muted: boolean): void {
+    this.volInput.value = String(volume);
+    this.muteBtn.classList.toggle('toggled', muted);
+    this.muteBtn.textContent = muted ? '🔇' : '🔊';
+  }
+
+  /** P-VIVO.10 — ¿edificios 3D activos? (para serializar el escenario). */
+  get googleActive(): boolean { return this.googleBtn.classList.contains('toggled'); }
+
+  /** P-VIVO.10 — restaura la rama alta sin desincronizar el checkbox. */
+  setHighAngle(on: boolean): void {
+    this.preferHighAngle = on;
+    this.highCheckbox.checked = on;
+  }
+
+  /**
+   * P-VIVO.10 — restaura arma/munición/carga desde un enlace o la sesión,
+   * SIN disparar los callbacks de usuario: el llamador (main) aplica los
+   * efectos laterales (silueta del arma, worker, tabla, anillos) en el orden
+   * correcto de la restauración.
+   */
+  applyShared(weaponId: WeaponId, roundIndex: number, chargeIndex: number): void {
+    if (![...this.weaponSel.options].some((o) => o.value === weaponId)) return;
+    this.weaponId = weaponId;
+    this.weaponSel.value = weaponId;
+    this.rebuildRounds();
+    this.rebuildCharges();
+    const rounds = WeaponCatalog.get(this.weaponId).rounds ?? [];
+    if (roundIndex > 0 && roundIndex < rounds.length) {
+      this.roundIndex = roundIndex;
+      this.roundSelect.value = String(roundIndex);
+    }
+    const w = this.weapon();
+    if (chargeIndex >= 0 && chargeIndex < w.charges.length) {
+      this.chargeIndex = chargeIndex;
+      this.chargeSelect.value = String(chargeIndex);
+    }
+    this.applyWeaponLimits();
+  }
+
+  /** P-VIVO.6 — el reto FO fuerza la parábola OFF (y la restaura al salir). */
+  setArcChecked(on: boolean): void {
+    if (this.arcCheckbox.checked === on) return;
+    this.arcCheckbox.checked = on;
+    this.cb.onToggleArc(on);
+  }
+
+  /** ¿Parábola de preview visible? (la serializa shareState, P-VIVO.10). */
+  get arcChecked(): boolean { return this.arcCheckbox.checked; }
+
+  /** P-VIVO.8 — conmuta día/noche (con notify=false solo refleja estado). */
+  setNight(active: boolean, notify = true): void {
+    this.nightActive = active;
+    this.nightBtn.classList.toggle('toggled', active);
+    this.nightBtn.textContent = active ? '☀️ Día' : '🌙 Noche';
+    if (notify) this.cb.onNight(active);
   }
 
   /** Arma con la munición seleccionada aplicada (P-PRO.4). */

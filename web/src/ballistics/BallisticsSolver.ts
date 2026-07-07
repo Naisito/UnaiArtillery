@@ -23,6 +23,7 @@ import { Atmosphere } from './Atmosphere';
 import { Munition } from './Munition';
 import { Vec3 } from './Vec3';
 import { EnuFrame, WGS84 } from './Geodesy';
+import type { FuzeSpec } from './WeaponSystem';
 
 /** One integrated sample of the flight, handed to VFX / camera / logging. */
 export interface TrajectorySample {
@@ -46,6 +47,14 @@ export interface FlightResult {
   impacted: boolean;
   warheadTNTeq: number;    // yield rides along so VFX never guesses (P0.1)
   rhsEvaluations: number;  // # of derivative evaluations (benchmark/diagnostics)
+  /**
+   * P-VIVO.3 — cómo terminó el vuelo: impacto clásico en el suelo ('ground'),
+   * detonación aérea por espoleta de tiempo/proximidad ('air') o impacto con
+   * espoleta de retardo ('buried': mismo punto, explosión enterrada).
+   */
+  detonation: 'ground' | 'air' | 'buried';
+  /** Altura del punto de detonación sobre el suelo local (m; 0 en impacto). */
+  burstHeightM: number;
 }
 
 export class SolverConfig {
@@ -125,9 +134,17 @@ export class BallisticsSolver {
    * Integrate a full trajectory from launch to impact (or time cap).
    * Positions/velocities in and out are ENU meters regardless of mode.
    * `targetEnu` feeds the P1.5 proportional-navigation guidance of rounds
-   * whose munition has `guidance.enabled`.
+   * whose munition has `guidance.enabled`. `fuze` (P-VIVO.3) cambia SOLO la
+   * condición de corte; ausente o 'impact'/'delay' la integración es bit a
+   * bit la clásica.
    */
-  integrate(round: Munition, launchPos: Vec3, launchVel: Vec3, targetEnu?: Vec3): FlightResult {
+  integrate(
+    round: Munition,
+    launchPos: Vec3,
+    launchVel: Vec3,
+    targetEnu?: Vec3,
+    fuze?: FuzeSpec,
+  ): FlightResult {
     const cfg = this.cfg;
     const ops = cfg.sphericalEarth ? this.makeSphericalOps() : this.makeFlatOps();
 
@@ -172,7 +189,14 @@ export class BallisticsSolver {
       impacted: false,
       warheadTNTeq: round.warheadMassTNTeq,
       rhsEvaluations: 0,
+      detonation: 'ground',
+      burstHeightM: 0.0,
     };
+
+    // P-VIVO.3 — parámetros de la espoleta (solo la condición de corte).
+    const fuzeMode = fuze?.mode ?? 'impact';
+    const fuzeTimeS = fuzeMode === 'time' ? Math.max(0, fuze?.timeS ?? 0) : Number.POSITIVE_INFINITY;
+    const fuzeHeightM = fuze?.heightM ?? 7.0;
 
     let t = 0.0;
     const launchFramePos = s.pos.clone();
@@ -206,11 +230,51 @@ export class BallisticsSolver {
       const curGround = this.groundAt(ops, s.pos);
       const wasAbove = prevAlt - prevGround >= 0.0;
       const nowBelow = alt - curGround < 0.0;
-      if (wasAbove && nowBelow && (crestMask || ops.descending(s.pos, s.vel))) {
-        // Linear interpolation to the crossing for a clean impact point.
-        const f0 = prevAlt - prevGround;
-        const f1 = alt - curGround;
+
+      // P-VIVO.3 — espoleta de proximidad: detona al bajar de fuzeHeightM
+      // sobre el suelo en fase DESCENDENTE (el terreno ya se muestrea por
+      // paso: es una comparación más). El cruce ascendente con una ladera
+      // sigue siendo impacto de la puerta clásica de abajo.
+      if (
+        fuzeMode === 'proximity' &&
+        ops.descending(s.pos, s.vel) &&
+        prevAlt - prevGround >= fuzeHeightM &&
+        alt - curGround < fuzeHeightM
+      ) {
+        const f0 = prevAlt - prevGround - fuzeHeightM;
+        const f1 = alt - curGround - fuzeHeightM;
         const frac = f0 / (f0 - f1);
+        const burst: State = {
+          pos: prev.pos.add(s.pos.sub(prev.pos).mul(frac)),
+          vel: prev.vel.add(s.vel.sub(prev.vel).mul(frac)),
+          mass: s.mass,
+        };
+        const tBurst = t - cfg.dt + frac * cfg.dt;
+        this.pushSample(out, ctx, burst, tBurst);
+        out.impacted = true;
+        out.detonation = 'air';
+        out.impactPoint = ops.toEnuPosition(burst.pos);
+        out.impactSpeed = burst.vel.length();
+        out.timeOfFlight = tBurst;
+        out.burstHeightM = ops.altitude(burst.pos) - this.groundAt(ops, burst.pos);
+        s = burst;
+        break;
+      }
+
+      // Cruce con el suelo dentro del paso (si lo hay): frac del instante.
+      const crossFrac =
+        wasAbove && nowBelow && (crestMask || ops.descending(s.pos, s.vel))
+          ? (prevAlt - prevGround) / (prevAlt - prevGround - (alt - curGround))
+          : Number.POSITIVE_INFINITY;
+      // P-VIVO.3 — espoleta de tiempo: frac del instante timeS en este paso.
+      const timeFrac =
+        fuzeMode === 'time' && t >= fuzeTimeS
+          ? Math.max(0, (fuzeTimeS - (t - cfg.dt)) / cfg.dt)
+          : Number.POSITIVE_INFINITY;
+
+      if (crossFrac <= timeFrac && crossFrac <= 1.0) {
+        // Linear interpolation to the crossing for a clean impact point.
+        const frac = crossFrac;
         const hit: State = {
           pos: prev.pos.add(s.pos.sub(prev.pos).mul(frac)),
           vel: prev.vel.add(s.vel.sub(prev.vel).mul(frac)),
@@ -219,10 +283,29 @@ export class BallisticsSolver {
         const tHit = t - cfg.dt + frac * cfg.dt;
         this.pushSample(out, ctx, hit, tHit);
         out.impacted = true;
+        if (fuzeMode === 'delay') out.detonation = 'buried';
         out.impactPoint = ops.toEnuPosition(hit.pos);
         out.impactSpeed = hit.vel.length();
         out.timeOfFlight = tHit;
         s = hit;
+        break;
+      }
+
+      if (timeFrac <= 1.0) {
+        // Detonación aérea en t = timeS, esté donde esté el proyectil.
+        const burst: State = {
+          pos: prev.pos.add(s.pos.sub(prev.pos).mul(timeFrac)),
+          vel: prev.vel.add(s.vel.sub(prev.vel).mul(timeFrac)),
+          mass: s.mass,
+        };
+        this.pushSample(out, ctx, burst, fuzeTimeS);
+        out.impacted = true;
+        out.detonation = 'air';
+        out.impactPoint = ops.toEnuPosition(burst.pos);
+        out.impactSpeed = burst.vel.length();
+        out.timeOfFlight = fuzeTimeS;
+        out.burstHeightM = ops.altitude(burst.pos) - this.groundAt(ops, burst.pos);
+        s = burst;
         break;
       }
 

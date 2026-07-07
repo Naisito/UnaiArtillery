@@ -26,7 +26,10 @@ import { Vec3, WeaponSystem } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { ProjectilePresenter } from './ProjectilePresenter';
 
-export type CameraMode = 'free' | 'orbital' | 'follow' | 'drone' | 'cabin' | 'fps';
+//    * op      — P-VIVO.6: puesto de observación FIJO (reto FO): girar con
+//                arrastre, zoom de prismáticos con la rueda (FOV), sin
+//                desplazamiento. Se entra con enterOp().
+export type CameraMode = 'free' | 'orbital' | 'follow' | 'drone' | 'cabin' | 'fps' | 'op';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -66,6 +69,12 @@ export class CameraDirector {
   private fpsSpeed = 30; // m/s; la rueda lo ajusta (2..1000)
   private readonly keys = new Set<string>();
 
+  // -- Puesto de observación (P-VIVO.6) ----------------------------------------
+  private opPos: Vec3 | null = null;
+  private opYawDeg = 0;
+  private opPitchDeg = 0;
+  private opSavedFovDeg: number | null = null;
+
   constructor(
     private readonly viewer: Cesium.Viewer,
     private readonly service: BallisticsService,
@@ -74,6 +83,14 @@ export class CameraDirector {
   }
 
   setMode(mode: CameraMode): void {
+    // P-VIVO.6 — al salir del OP se restauran los prismáticos (FOV).
+    if (this.mode === 'op' && mode !== 'op' && this.opSavedFovDeg !== null) {
+      const f = this.viewer.camera.frustum;
+      if (f instanceof Cesium.PerspectiveFrustum) {
+        f.fov = Cesium.Math.toRadians(this.opSavedFovDeg);
+      }
+      this.opSavedFovDeg = null;
+    }
     this.mode = mode;
     this.smoothedPos = null; // re-engancha suave desde la posición actual
     this.smoothedAim = null;
@@ -91,6 +108,20 @@ export class CameraDirector {
       this.followYawDeg = 0;
       this.followPitchDeg = 0;
     }
+  }
+
+  /**
+   * P-VIVO.6 — planta la cámara en el puesto de observación: posición FIJA,
+   * mirando por `lookAzimuthDeg`; arrastrar gira, la rueda es zoom óptico.
+   */
+  enterOp(posEnu: Vec3, lookAzimuthDeg: number): void {
+    this.opPos = posEnu.clone();
+    this.opYawDeg = lookAzimuthDeg;
+    this.opPitchDeg = 0;
+    const f = this.viewer.camera.frustum;
+    this.opSavedFovDeg =
+      f instanceof Cesium.PerspectiveFrustum && f.fov ? Cesium.Math.toDegrees(f.fov) : null;
+    this.setMode('op');
   }
 
   /** Velocidad de vuelo actual del modo 1ª persona (para el HUD/toasts). */
@@ -135,7 +166,8 @@ export class CameraDirector {
     window.addEventListener('keyup', (ev) => this.keys.delete(ev.code));
     window.addEventListener('blur', () => this.keys.clear());
 
-    // Rueda: zoom del seguimiento / velocidad de vuelo en 1ª persona.
+    // Rueda: zoom del seguimiento / velocidad de vuelo en 1ª persona /
+    // prismáticos del puesto de observación (P-VIVO.6).
     canvas.addEventListener(
       'wheel',
       (ev) => {
@@ -145,27 +177,47 @@ export class CameraDirector {
         } else if (this.mode === 'fps') {
           ev.preventDefault();
           this.fpsSpeed = clamp(this.fpsSpeed * (ev.deltaY < 0 ? 1.25 : 0.8), 2, 1000);
+        } else if (this.mode === 'op') {
+          ev.preventDefault();
+          const f = this.viewer.camera.frustum;
+          if (f instanceof Cesium.PerspectiveFrustum && f.fov) {
+            const deg = clamp(
+              Cesium.Math.toDegrees(f.fov) * (ev.deltaY > 0 ? 1.15 : 1 / 1.15), 8, 80,
+            );
+            f.fov = Cesium.Math.toRadians(deg);
+          }
         }
       },
       { passive: false },
     );
 
-    // Arrastre en modo seguir: orbita alrededor del proyectil.
+    // Arrastre: orbita el proyectil (seguir) o gira la cabeza (OP).
     canvas.addEventListener('pointerdown', (ev) => {
-      if (this.mode !== 'follow' || ev.button !== 0) return;
+      if ((this.mode !== 'follow' && this.mode !== 'op') || ev.button !== 0) return;
       this.dragging = true;
       this.lastDragX = ev.clientX;
       this.lastDragY = ev.clientY;
       canvas.setPointerCapture(ev.pointerId);
     });
     canvas.addEventListener('pointermove', (ev) => {
-      if (!this.dragging || this.mode !== 'follow') return;
+      if (!this.dragging) return;
       const dx = ev.clientX - this.lastDragX;
       const dy = ev.clientY - this.lastDragY;
       this.lastDragX = ev.clientX;
       this.lastDragY = ev.clientY;
-      this.followYawDeg = (this.followYawDeg + dx * 0.35) % 360;
-      this.followPitchDeg = clamp(this.followPitchDeg + dy * 0.25, -70, 62);
+      if (this.mode === 'follow') {
+        this.followYawDeg = (this.followYawDeg + dx * 0.35) % 360;
+        this.followPitchDeg = clamp(this.followPitchDeg + dy * 0.25, -70, 62);
+      } else if (this.mode === 'op') {
+        // El observador gira la cabeza: sensibilidad baja con el zoom óptico.
+        const f = this.viewer.camera.frustum;
+        const zoomK =
+          f instanceof Cesium.PerspectiveFrustum && f.fov
+            ? Cesium.Math.toDegrees(f.fov) / 60
+            : 1;
+        this.opYawDeg = (this.opYawDeg + dx * 0.12 * zoomK) % 360;
+        this.opPitchDeg = clamp(this.opPitchDeg - dy * 0.1 * zoomK, -40, 45);
+      }
     });
     const endDrag = (ev: PointerEvent) => {
       this.dragging = false;
@@ -285,6 +337,19 @@ export class CameraDirector {
         aim = this.focusEnu;
         break;
       }
+      case 'op': {
+        // P-VIVO.6 — clavado en el puesto de observación: solo gira la vista.
+        if (!this.opPos) return;
+        const yaw = (this.opYawDeg * Math.PI) / 180;
+        const pitch = (this.opPitchDeg * Math.PI) / 180;
+        desired = this.opPos;
+        aim = this.opPos.add(new Vec3(
+          Math.sin(yaw) * Math.cos(pitch),
+          Math.cos(yaw) * Math.cos(pitch),
+          Math.sin(pitch),
+        ).mul(1000));
+        break;
+      }
       case 'cabin': {
         // Vista de ARTILLERO (estilo videojuego): el ojo va detrás de la
         // culata a altura de mira, y la mirada apunta casi al HORIZONTE por
@@ -309,8 +374,9 @@ export class CameraDirector {
         return;
     }
 
-    // La cabina sigue a la rueda: rigidez extra para que apunte sin flotar.
-    const stiff = this.mode === 'cabin' ? this.stiffness * 3.5 : this.stiffness;
+    // La cabina y el OP siguen a la mano: rigidez extra para no flotar.
+    const stiff =
+      this.mode === 'cabin' || this.mode === 'op' ? this.stiffness * 3.5 : this.stiffness;
     const k = 1 - Math.exp(-stiff * dt);
     if (!this.smoothedPos) this.smoothedPos = this.service.frame.ecefToEnu(this.viewer.camera.positionWC);
     if (!this.smoothedAim) this.smoothedAim = aim.clone();

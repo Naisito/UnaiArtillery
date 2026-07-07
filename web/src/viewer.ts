@@ -25,8 +25,10 @@ export async function createViewer(containerId: string): Promise<Cesium.Viewer> 
   const viewer = new Cesium.Viewer(containerId, {
     // Sin token, el Viewer por defecto pediría imaginería ion y fallaría:
     // damos una capa base explícita de OSM en ese caso.
+    // P-VIVO.4 — waterMask: el mar SE VE como agua (especular animado) y de
+    // paso delata visualmente dónde el splash sustituye al cráter.
     ...(hasToken
-      ? { terrain: Cesium.Terrain.fromWorldTerrain() }
+      ? { terrain: Cesium.Terrain.fromWorldTerrain({ requestWaterMask: true }) }
       : {
           baseLayer: new Cesium.ImageryLayer(
             new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' }),

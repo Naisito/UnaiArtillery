@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { Vec3 } from '../ballistics/Vec3';
 import { getPuffTexture, makeGlowSprite } from '../render/PostFX';
+import { FlareKinematics } from './flare';
 
 /** Un efecto vivo. update() devuelve false cuando ha muerto. */
 export interface Effect {
@@ -37,14 +38,17 @@ type WindFn = (posEnu: Vec3) => Vec3;
 // ---------------------------------------------------------------------------
 const PUFF_POOL_CAP = 600;
 
-interface PuffLease { sprite: THREE.Sprite; evict: () => void; }
+interface PuffLease { sprite: THREE.Sprite; evict: () => void; sticky: boolean; }
 
 class PuffPool {
   private free: THREE.Sprite[] = [];
   private live: PuffLease[] = []; // en orden de adquisición (el [0] es el más viejo)
   private created = 0;
 
-  acquire(evict: () => void): THREE.Sprite {
+  /** P-VIVO.8 — `sticky`: préstamo prioritario (cortinas de humo persistentes)
+   *  que el robo por cap NUNCA toca: al agotarse se desaloja el más viejo NO
+   *  sticky (una ráfaga de P-VIVO.2 no puede comerse la cortina). */
+  acquire(evict: () => void, sticky = false): THREE.Sprite {
     let sprite = this.free.pop();
     if (!sprite) {
       if (this.created < PUFF_POOL_CAP) {
@@ -55,12 +59,15 @@ class PuffPool {
         }));
         this.created++;
       } else {
-        // Cap agotado: el puff más viejo cede el sitio (su dueño lo libera).
-        const oldest = this.live.shift();
-        oldest?.evict();
-        sprite = this.free.pop();
+        // Cap agotado: el puff más viejo NO prioritario cede el sitio.
+        const idx = this.live.findIndex((l) => !l.sticky);
+        if (idx >= 0) {
+          const [oldest] = this.live.splice(idx, 1);
+          oldest.evict();
+          sprite = this.free.pop();
+        }
         if (!sprite) {
-          // El dueño no liberó (no debería pasar): crea uno fuera de cap.
+          // Todo sticky (o el dueño no liberó): crea uno fuera de cap.
           sprite = new THREE.Sprite(new THREE.SpriteMaterial({
             map: getPuffTexture(), transparent: true, depthWrite: false,
           }));
@@ -69,7 +76,7 @@ class PuffPool {
       }
     }
     sprite.visible = true;
-    this.live.push({ sprite, evict });
+    this.live.push({ sprite, evict, sticky });
     return sprite;
   }
 
@@ -78,6 +85,7 @@ class PuffPool {
     if (idx >= 0) this.live.splice(idx, 1);
     sprite.visible = false;
     sprite.parent?.remove(sprite);
+    sprite.material.blending = THREE.NormalBlending; // deshace la trazadora aditiva
     this.free.push(sprite);
   }
 
@@ -130,13 +138,18 @@ class PuffCloud implements Effect {
     windDrag?: number;
     opacity?: number;
     color?: THREE.ColorRepresentation;
+    /** P-VIVO.2 — blending aditivo (trazadoras); el pool lo deshace al soltar. */
+    additive?: boolean;
+    /** P-VIVO.8 — préstamo prioritario del pool (humo persistente). */
+    sticky?: boolean;
   }): void {
     // P-PRO.8 — sprite prestado del pool: se CONFIGURA, no se crea.
-    const sprite = puffPool.acquire(() => this.evict(sprite));
+    const sprite = puffPool.acquire(() => this.evict(sprite), opts.sticky ?? false);
     const mat = sprite.material;
     mat.color.set(opts.color ?? this.color);
     mat.opacity = opts.opacity ?? 0.5;
     mat.rotation = Math.random() * Math.PI * 2; // rompe el patrón radial
+    mat.blending = opts.additive ? THREE.AdditiveBlending : THREE.NormalBlending;
     sprite.position.copy(opts.pos);
     sprite.scale.setScalar(opts.size);
     this.group.add(sprite);
@@ -237,16 +250,30 @@ class MuzzleFlashFX implements Effect {
 //  Estela del proyectil (condensación transónica + exhausto de cohete).
 // ---------------------------------------------------------------------------
 export class TrailFX implements Effect {
+  /** P-VIVO.2 — duración del trazador: la composición pirotécnica se consume. */
+  static readonly TRACER_BURNOUT_S = 3.5;
+
   private readonly cloud: PuffCloud;
   private readonly exhaustGlow: THREE.Sprite;
   private emitAccum = 0;
   private dead = false;
+  private tracer = false;
+  private tracerAge = 0;
 
   constructor(parent: THREE.Object3D, wind: WindFn) {
     this.cloud = new PuffCloud(parent, wind, 0xf4f8ff);
     this.exhaustGlow = makeGlowSprite(0xffc27a, 10);
     this.exhaustGlow.visible = false;
     parent.add(this.exhaustGlow);
+  }
+
+  /** P-VIVO.2 — variante trazadora: línea aditiva rojo-anaranjada SIEMPRE
+   *  visible (no depende de Mach) hasta consumirse a los ~3.5 s.
+   *  P-VIVO.4 — `initialAgeS`: en un tramo de rebote el trazador ya llevaba
+   *  ardiendo el tiempo del tramo anterior. */
+  setTracer(on: boolean, initialAgeS = 0): void {
+    this.tracer = on;
+    this.tracerAge = initialAgeS;
   }
 
   /** Alimentar cada frame desde el presentador (P4.1: parámetros físicos). */
@@ -260,6 +287,29 @@ export class TrailFX implements Effect {
     if (this.dead) return;
     this.exhaustGlow.visible = thrusting;
     if (thrusting) this.exhaustGlow.position.copy(pos);
+
+    // P-VIVO.2 — trazadora: emisión aditiva continua, independiente del Mach.
+    if (this.tracer) {
+      this.tracerAge += dt;
+      if (this.tracerAge > TrailFX.TRACER_BURNOUT_S) return; // consumida
+      this.emitAccum += 110 * dt;
+      while (this.emitAccum >= 1) {
+        this.emitAccum -= 1;
+        this.cloud.emit({
+          pos,
+          vel: new THREE.Vector3(0, 0, 0),
+          life: 0.3,
+          size: 1.6,
+          grow: 0.4,
+          gravity: 0,
+          opacity: 0.95,
+          color: 0xff7a34, // rojo-anaranjado pirotécnico
+          additive: true,
+          windDrag: 0,
+        });
+      }
+      return;
+    }
 
     // Banda de condensación: máxima en transónico, se desvanece con la
     // densidad (aire fino a gran altitud = estela más tenue).
@@ -358,6 +408,8 @@ class ImpactExplosionFX implements Effect {
     private readonly pos: THREE.Vector3,
     private readonly yieldScale: number,
     wind: WindFn,
+    /** P-VIVO.5 — sin falda de polvo (explosión EN una fachada: no hay suelo). */
+    private readonly withDust = true,
   ) {
     const y = yieldScale;
     this.flash = makeGlowSprite(0xffffff, 60 * y);
@@ -395,7 +447,7 @@ class ImpactExplosionFX implements Effect {
         });
       }
       // Falda de polvo lateral (marca la sobrepresión en el suelo).
-      const nDust = Math.round(20 * Math.min(3, y));
+      const nDust = this.withDust ? Math.round(20 * Math.min(3, y)) : 0;
       for (let i = 0; i < nDust; i++) {
         const ang = (i / nDust) * Math.PI * 2;
         const speed = 26 * y * (0.75 + Math.random() * 0.5);
@@ -477,6 +529,254 @@ class GroundShockwaveFX implements Effect {
 }
 
 // ---------------------------------------------------------------------------
+//  P-VIVO.4 — Splash de agua: columna blanca + anillos concéntricos + spray.
+//
+//  SIN cráter, SIN quemadura, SIN falda de polvo: el agua se traga el tiro y
+//  devuelve una columna vertical (sprites del pool apilados, tinte
+//  azul-blanco), 3 anillos expansivos a ras de agua y spray que CAE (gravedad
+//  positiva, al revés que el humo). Escala con yield^(1/3) como la explosión.
+// ---------------------------------------------------------------------------
+class WaterSplashFX implements Effect {
+  private readonly column: PuffCloud;
+  private readonly spray: PuffCloud;
+  private readonly rings: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; delay: number }[] = [];
+  private age = 0;
+  private seeded = false;
+
+  constructor(
+    private readonly parent: THREE.Object3D,
+    private readonly pos: THREE.Vector3,
+    private readonly yieldScale: number,
+    wind: WindFn,
+  ) {
+    this.column = new PuffCloud(parent, wind, 0xe8f4ff);
+    this.spray = new PuffCloud(parent, wind, 0xd0e8f8);
+    // 3 anillos concéntricos escalonados a ras de agua.
+    for (let i = 0; i < 3; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xd6ecff, transparent: true, opacity: 0,
+        side: THREE.DoubleSide, depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.0, 48), mat);
+      mesh.position.copy(pos).add(new THREE.Vector3(0, 0, 0.3));
+      parent.add(mesh);
+      this.rings.push({ mesh, mat, delay: i * 0.22 });
+    }
+  }
+
+  update(dt: number): boolean {
+    const y = this.yieldScale;
+    this.age += dt;
+
+    if (!this.seeded) {
+      this.seeded = true;
+      // Columna vertical: bocanadas casi sin dispersión lateral, muy rápidas.
+      const nCol = Math.round(16 * Math.min(3, y));
+      for (let i = 0; i < nCol; i++) {
+        this.column.emit({
+          pos: this.pos.clone().add(new THREE.Vector3(
+            (Math.random() - 0.5) * 2 * y, (Math.random() - 0.5) * 2 * y, 1 + Math.random() * 3,
+          )),
+          vel: new THREE.Vector3(
+            (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, (22 + Math.random() * 18) * y,
+          ),
+          life: 1.6 + Math.random() * 0.8,
+          size: 5 * y,
+          grow: 4 * y,
+          gravity: 0.55, // el agua CAE — no flota como el humo
+          opacity: 0.7,
+          windDrag: 0.4,
+        });
+      }
+      // Spray lateral bajo que cae enseguida.
+      const nSpray = Math.round(12 * Math.min(3, y));
+      for (let i = 0; i < nSpray; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const speed = (10 + Math.random() * 8) * y;
+        this.spray.emit({
+          pos: this.pos.clone(),
+          vel: new THREE.Vector3(Math.cos(ang) * speed, Math.sin(ang) * speed, 6 + Math.random() * 6),
+          life: 1.1 + Math.random() * 0.6,
+          size: 3 * y,
+          grow: 3 * y,
+          gravity: 0.8,
+          opacity: 0.55,
+          windDrag: 0.8,
+        });
+      }
+    }
+
+    // Anillos expansivos escalonados (~2 s de vida cada uno).
+    for (const r of this.rings) {
+      const t = Math.min(1, Math.max(0, (this.age - r.delay) / 2.0));
+      const radius = 1 + 55 * this.yieldScale * Math.sqrt(t);
+      r.mesh.scale.setScalar(radius);
+      r.mat.opacity = t <= 0 || t >= 1 ? 0 : 0.5 * (1 - t);
+    }
+
+    const cloudsAlive = [this.column.update(dt), this.spray.update(dt)].some(Boolean);
+    return this.age < 2.8 || cloudsAlive;
+  }
+
+  dispose(): void {
+    this.column.dispose();
+    this.spray.dispose();
+    for (const r of this.rings) {
+      this.parent.remove(r.mesh);
+      r.mesh.geometry.dispose();
+      r.mat.dispose();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  P-VIVO.8 — Bengala ILLUM bajo paracaídas.
+//
+//  Sprite aditivo blanco-cálido parpadeante + THREE.PointLight de ~800 m que
+//  desciende a 4.5 m/s DERIVANDO con el viento real (FlareKinematics, perfil
+//  inyectado) durante ~50 s. TRUCO DOCUMENTADO: la PointLight de Three NO
+//  ilumina el globo de Cesium (pipelines de materiales separados) — solo los
+//  objetos Three (cañón, camión, cráteres, proyectiles). Se compensa con un
+//  "disco de luz" falso: un sprite aditivo suave proyectado en el suelo que
+//  sigue a la bengala y vende la iluminación del terreno.
+// ---------------------------------------------------------------------------
+export class FlareFX implements Effect {
+  private readonly kin: FlareKinematics;
+  private readonly glow: THREE.Sprite;
+  private readonly halo: THREE.Sprite;
+  private readonly light: THREE.PointLight;
+  private readonly groundDisc: THREE.Sprite;
+  private age = 0;
+
+  constructor(
+    private readonly parent: THREE.Object3D,
+    startEnu: Vec3,
+    private readonly groundZ: number,
+    wind: WindFn,
+  ) {
+    // El perfil que inyectamos muestrea el viento REAL a la altitud de la
+    // bengala (la deriva cambia al cruzar capas: es la gracia).
+    this.kin = new FlareKinematics(
+      { x: startEnu.x, y: startEnu.y, z: startEnu.z },
+      (z) => {
+        const w = wind(new Vec3(startEnu.x, startEnu.y, z));
+        return { x: w.x, y: w.y };
+      },
+    );
+    this.glow = makeGlowSprite(0xfff2d0, 22);
+    this.halo = makeGlowSprite(0xffe9b0, 60);
+    this.light = new THREE.PointLight(0xfff0c8, 2.6e5, 800, 2);
+    this.groundDisc = makeGlowSprite(0xffedbe, 240);
+    (this.groundDisc.material as THREE.SpriteMaterial).opacity = 0.16;
+    parent.add(this.glow, this.halo, this.light, this.groundDisc);
+  }
+
+  update(dt: number): boolean {
+    this.age += dt;
+    const p = this.kin.at(this.age);
+    if (!p.alive) return false;
+    // Parpadeo pirotécnico: dos senos inconmensurables + algo de ruido.
+    const flicker =
+      0.82 + 0.12 * Math.sin(this.age * 23.0) + 0.06 * Math.sin(this.age * 7.7) +
+      0.05 * (Math.random() - 0.5);
+    const k = p.intensity * flicker;
+    this.glow.position.set(p.x, p.y, p.z);
+    this.halo.position.set(p.x, p.y, p.z);
+    this.light.position.set(p.x, p.y, p.z);
+    (this.glow.material as THREE.SpriteMaterial).opacity = k;
+    (this.halo.material as THREE.SpriteMaterial).opacity = 0.35 * k;
+    this.light.intensity = 2.6e5 * k;
+    // Disco de luz falso a ras de suelo, bajo la bengala; encoge al bajar.
+    const height = Math.max(10, p.z - this.groundZ);
+    this.groundDisc.position.set(p.x, p.y, this.groundZ + 1.5);
+    this.groundDisc.scale.setScalar(Math.max(60, height * 0.9));
+    (this.groundDisc.material as THREE.SpriteMaterial).opacity = 0.16 * p.intensity;
+    return true;
+  }
+
+  dispose(): void {
+    this.parent.remove(this.glow, this.halo, this.light, this.groundDisc);
+    this.glow.material.dispose();
+    this.halo.material.dispose();
+    this.groundDisc.material.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  P-VIVO.8 — Cortina de humo SMOKE.
+//
+//  8-12 nubes GRANDES y persistentes (~90 s, re-alimentadas cada pocos
+//  segundos) formando una línea perpendicular al rumbo de llegada, que
+//  derivan con el viento de superficie (PuffCloud ya relaja su velocidad
+//  hacia el viento local). Préstamos `sticky` del pool: una ráfaga de
+//  P-VIVO.2 no puede robarle los sprites a la cortina.
+// ---------------------------------------------------------------------------
+export class SmokeScreenFX implements Effect {
+  static readonly LIFE_S = 90;
+
+  private readonly cloud: PuffCloud;
+  private readonly anchors: THREE.Vector3[] = [];
+  private age = 0;
+  private nextFeed = 0;
+
+  constructor(
+    parent: THREE.Object3D,
+    centerEnu: Vec3,
+    bearingDeg: number,
+    wind: WindFn,
+    yieldScale = 1,
+  ) {
+    this.cloud = new PuffCloud(parent, wind, 0xdadfe2);
+    // Línea perpendicular al rumbo: 5 anclas separadas ~22 m (~90 m de frente).
+    const az = (bearingDeg * Math.PI) / 180;
+    const perp = { x: Math.cos(az), y: -Math.sin(az) };
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const t = (i - (n - 1) / 2) * 22 * Math.max(0.7, yieldScale);
+      this.anchors.push(new THREE.Vector3(
+        centerEnu.x + perp.x * t, centerEnu.y + perp.y * t, centerEnu.z + 2,
+      ));
+    }
+  }
+
+  /** Cada ancla mantiene 2-3 nubes vivas: re-alimenta cada ~7 s. */
+  private feed(initial: boolean): void {
+    for (const a of this.anchors) {
+      const count = initial ? 2 : 1;
+      for (let i = 0; i < count; i++) {
+        this.cloud.emit({
+          pos: a.clone().add(new THREE.Vector3(
+            (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, Math.random() * 6,
+          )),
+          vel: new THREE.Vector3((Math.random() - 0.5) * 1.5, (Math.random() - 0.5) * 1.5, 1.2),
+          life: 16 + Math.random() * 6,
+          size: 16,
+          grow: 1.6,
+          gravity: -0.015, // el humo blanco flota despacio
+          opacity: 0.55,
+          windDrag: 0.6,
+          sticky: true, // prioridad en el pool: la cortina no se desmonta
+        });
+      }
+    }
+  }
+
+  update(dt: number): boolean {
+    this.age += dt;
+    if (this.age >= this.nextFeed && this.age < SmokeScreenFX.LIFE_S) {
+      this.feed(this.nextFeed === 0);
+      this.nextFeed = this.age + 7;
+    }
+    const alive = this.cloud.update(dt);
+    return this.age < SmokeScreenFX.LIFE_S || alive;
+  }
+
+  dispose(): void {
+    this.cloud.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  Gestor: agrega efectos, los actualiza y expone los "spawners".
 // ---------------------------------------------------------------------------
 export class VfxManager {
@@ -523,11 +823,55 @@ export class VfxManager {
     this.effects.push(smoke);
   }
 
+  /**
+   * P-VIVO.2 — firma de ráfaga compartida: 1 fogonazo + 1 bocanada por cada
+   * 3 disparos (nada de humo individual: a 9 disparos/s saturaría el pool).
+   */
+  burstFlash(muzzleEnu: Vec3, dirEnu: Vec3, scale = 0.6): void {
+    const pos = new THREE.Vector3(muzzleEnu.x, muzzleEnu.y, muzzleEnu.z);
+    this.effects.push(new MuzzleFlashFX(this.root, pos, scale));
+    const puff = new PuffCloud(this.root, this.wind, 0xb9bdc2);
+    const dir = new THREE.Vector3(dirEnu.x, dirEnu.y, dirEnu.z).normalize();
+    puff.emit({
+      pos: pos.clone().addScaledVector(dir, 1.2),
+      vel: dir.clone().multiplyScalar(9).add(new THREE.Vector3(0, 0, 1.5)),
+      life: 2.2,
+      size: 1.6 * scale,
+      grow: 2.4,
+      opacity: 0.4,
+      windDrag: 1.3,
+    });
+    this.effects.push(puff);
+  }
+
   /** Explosión de impacto escalada por yield^(1/3) + anillo de polvo. */
   impactExplosion(impactEnu: Vec3, yieldScale: number): void {
     const pos = new THREE.Vector3(impactEnu.x, impactEnu.y, impactEnu.z);
     this.effects.push(new ImpactExplosionFX(this.root, pos, yieldScale, this.wind));
     this.effects.push(new GroundShockwaveFX(this.root, pos, 90 * yieldScale, 1.6));
+  }
+
+  /** P-VIVO.4 — splash de agua: columna + anillos + spray, SIN cráter. */
+  waterSplash(impactEnu: Vec3, yieldScale: number): void {
+    const pos = new THREE.Vector3(impactEnu.x, impactEnu.y, impactEnu.z);
+    this.effects.push(new WaterSplashFX(this.root, pos, yieldScale, this.wind));
+  }
+
+  /** P-VIVO.5 — explosión EN una fachada/tejado: bola de fuego + humo, sin
+   *  falda de polvo, sin anillo de suelo y sin cráter. */
+  structureExplosion(impactEnu: Vec3, yieldScale: number): void {
+    const pos = new THREE.Vector3(impactEnu.x, impactEnu.y, impactEnu.z);
+    this.effects.push(new ImpactExplosionFX(this.root, pos, yieldScale, this.wind, false));
+  }
+
+  /** P-VIVO.8 — bengala ILLUM colgada del viento real (~50 s de luz). */
+  flare(startEnu: Vec3, groundZ: number): void {
+    this.effects.push(new FlareFX(this.root, startEnu, groundZ, this.wind));
+  }
+
+  /** P-VIVO.8 — cortina de humo perpendicular al rumbo (~90 s, deriva). */
+  smokeScreen(centerEnu: Vec3, bearingDeg: number, yieldScale = 1): void {
+    this.effects.push(new SmokeScreenFX(this.root, centerEnu, bearingDeg, this.wind, yieldScale));
   }
 
   /** Estela persistente para un proyectil (el presentador la alimenta). */

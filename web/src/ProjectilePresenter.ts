@@ -16,6 +16,8 @@ import { makeGlowSprite } from './render/PostFX';
 import { CraterLayer } from './vfx/CraterLayer';
 import { ShockConeFX, TrailFX, VfxManager } from './vfx/effects';
 import { AudioBoom } from './vfx/AudioBoom';
+import { azimuthDegOf } from './vfx/audioMath';
+import { toast } from './ui/toast';
 
 export interface Telemetry {
   t: number;
@@ -29,6 +31,32 @@ export interface Telemetry {
   flightAlpha: number; // 0..1
 }
 
+/** Opciones de presentación de un tiro (la física no cambia). */
+export interface PresenterOptions {
+  /** P-VIVO.2 — bala trazadora: línea aditiva rojo-anaranjada ~3.5 s. */
+  tracer?: boolean;
+  /** P-VIVO.2 — bala de ráfaga: sin firma de boca propia (VFX/audio los
+   *  comparte la ráfaga a 1 de cada 3 disparos). */
+  silentLaunch?: boolean;
+  /** P-VIVO.10 — repetición: VFX sí, cráter NO (no duplicar la huella). */
+  noCrater?: boolean;
+  /**
+   * P-VIVO.10 — dilatación FIJA para toda la reproducción (repetición a
+   * ×0.25): se re-afirma cada frame para que el bullet-time del director no
+   * la pise.
+   */
+  fixedDilation?: number;
+  /**
+   * P-VIVO.4 — tramo de rebote: el trazador ya llevaba ardiendo este tiempo
+   * (la composición se consume desde el DISPARO, no desde el rebote).
+   */
+  tracerAgeOffsetS?: number;
+  /** P-VIVO.4 — tramo intermedio de rebote: su impacto no puntúa retos. */
+  suppressScoring?: boolean;
+  /** P-VIVO.4 — el tramo NACE EN EL AIRE (rebote): nada de boca del arma. */
+  midair?: boolean;
+}
+
 export class ProjectilePresenter {
   /** 1 = tiempo real; el director de cámara lo baja para el bullet-time. */
   timeDilation = 1.0;
@@ -37,6 +65,12 @@ export class ProjectilePresenter {
   muzzleProvider?: () => Vec3;
   /** P-PRO.1 — se dispara al salir el tiro (retroceso visual del tubo). */
   onLaunch?: () => void;
+  /**
+   * P-VIVO.5 — recorte estructural contra los edificios 3D: si el muestreo
+   * visual (async, BuildingHit) encuentra una fachada/tejado en la cola de la
+   * trayectoria, la reproducción se corta ahí. Null = sin tileset/sin dato.
+   */
+  structuralClip: import('./BuildingHit').StructuralClip | null = null;
 
   readonly yieldScale: number;
 
@@ -65,6 +99,7 @@ export class ProjectilePresenter {
     readonly weapon: Weapon,
     readonly flight: FlightResult,
     startDelay = 0.0,
+    private readonly opts: PresenterOptions = {},
   ) {
     this.elapsed = -startDelay;
     this.flightDuration =
@@ -95,14 +130,27 @@ export class ProjectilePresenter {
     this.mesh.visible = false;
 
     // Trazador: halo pequeño para que el proyectil se lea a kilómetros.
-    this.tracerGlow = makeGlowSprite(0xfff1cf, 2);
+    // P-VIVO.2 — la bala trazadora arde rojo-anaranjado; la de ráfaga sin
+    // trazador es invisible en vuelo (como las reales).
+    this.tracerGlow = makeGlowSprite(opts.tracer ? 0xff8040 : 0xfff1cf, 2);
     this.tracerGlow.visible = false;
     this.mesh.add(this.tracerGlow);
 
     overlay.enuRoot.add(this.mesh);
     this.trail = vfx.makeTrail();
+    if (opts.tracer) this.trail.setTracer(true, opts.tracerAgeOffsetS ?? 0);
     this.shock = new ShockConeFX(overlay.enuRoot);
+
+    // P-VIVO.4 — clasifica la superficie del impacto EN CUANTO nace el tiro
+    // (async, 1 muestra cacheada): al caer ya se sabe si es agua o tierra.
+    void this.service
+      .isLikelyWater(flight.impactPoint)
+      .then((w) => { if (w) this.impactSurface = 'water'; })
+      .catch(() => { /* sin clasificación: tierra */ });
   }
+
+  /** P-VIVO.4 — superficie del punto de impacto ('land' salvo agua probada). */
+  private impactSurface: 'land' | 'water' = 'land';
 
   get flightAlpha(): number {
     return this.flightDuration > 0
@@ -182,6 +230,7 @@ export class ProjectilePresenter {
     }
     if (this.impacted) return true;
 
+    if (this.opts.fixedDilation !== undefined) this.timeDilation = this.opts.fixedDilation;
     this.elapsed += dtWall * this.timeDilation;
     if (this.elapsed < 0) return true; // esperando su turno (MRSI)
 
@@ -190,6 +239,14 @@ export class ProjectilePresenter {
       this.mesh.visible = true;
       this.tracerGlow.visible = true;
       this.handleLaunch();
+    }
+
+    // P-VIVO.5 — el edificio corta la reproducción ANTES del impacto físico
+    // (si el muestreo visual llegó a tiempo; si no, comportamiento clásico).
+    const clip = this.structuralClip?.result;
+    if (clip && this.elapsed >= clip.t) {
+      this.handleStructuralImpact(clip.point, clip.missM);
+      return true;
     }
 
     if (this.elapsed >= this.flightDuration) {
@@ -217,36 +274,92 @@ export class ProjectilePresenter {
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(this.mesh.position);
     this.tracerGlow.scale.setScalar(Math.min(40, Math.max(1.2, dist * 0.006)));
+    // P-VIVO.2 — la ráfaga: la trazadora se consume a los ~3.5 s; la bala sin
+    // trazadora vuela a oscuras (el mesh diminuto apenas se ve: correcto).
+    // P-VIVO.4 — en un tramo de rebote el trazador arrastra su edad previa.
+    if (this.opts.silentLaunch) {
+      this.tracerGlow.visible =
+        (this.opts.tracer ?? false) &&
+        this.elapsed + (this.opts.tracerAgeOffsetS ?? 0) < 3.5;
+    }
 
     // Estela: condensación transónica / exhausto del motor (P-WEB.5).
     const thrusting =
       this.weapon.round.motor.enabled && this.elapsed < this.weapon.round.motor.burnTime;
     this.trail.feed(dtWall * this.timeDilation, this.mesh.position, s.mach, s.pos.z, thrusting);
 
+    // P-VIVO.1 — acimut del proyectil respecto a la cámara (pan estéreo).
+    const azFromCam = azimuthDegOf(
+      this.mesh.position.x - camEnu.x, this.mesh.position.y - camEnu.y,
+    );
+
     // Chasquido supersónico al pasar cerca de la cámara (P3.2).
     if (!this.crackDone && s.mach > 1.05 && dist < 700) {
       this.crackDone = true;
-      this.audio.boom('crack', dist, this.service.soundSpeedAt(camEnu.z), 0.8);
+      this.audio.boom('crack', dist, this.service.soundSpeedAt(camEnu.z), 0.8, azFromCam);
     }
+
+    // P-VIVO.1 — silbido terminal: solo subsónico y a <500 m (audioMath
+    // decide; aquí solo alimentamos Mach/distancia/acimut cada frame).
+    this.audio.whistleTick(this, s.mach, dist, azFromCam);
     return true;
   }
 
   private handleLaunch(): void {
+    // P-VIVO.4 — un tramo de rebote nace EN EL AIRE, en el punto del rebote:
+    // ni fusión con la boca, ni retroceso, ni firma de lanzamiento.
+    if (this.opts.midair) return;
     // P-PRO.1 — el fogonazo nace EXACTAMENTE en la punta del tubo del modelo.
     const muzzle = this.muzzleProvider?.() ?? this.service.muzzleEnu;
     if (this.flight.path.length) {
       const p0 = this.flight.path[0].position;
       this.launchOffset = new Vec3(muzzle.x - p0.x, muzzle.y - p0.y, muzzle.z - p0.z);
     }
+    this.onLaunch?.();
+    // P-VIVO.2 — bala de ráfaga: la firma de boca (VFX + audio) la comparte
+    // la ráfaga (1 de cada 3 disparos, gestionado por ArtilleryPiece).
+    if (this.opts.silentLaunch) return;
+
     const v0 = this.flight.path.length ? this.flight.path[0].velocity : new Vec3(0, 0, 1);
     const rho = this.service.atmo.densityAt(muzzle.z + this.service.frame.heightM);
     const scale = Math.max(0.6, Math.cbrt(this.weapon.round.diameter / 0.155));
     this.vfx.launchSignature(muzzle, v0, rho, scale);
-    this.onLaunch?.();
 
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
-    this.audio.boom('muzzle', dist, this.service.soundSpeedAt(camEnu.z), scale);
+    this.audio.boom(
+      'muzzle', dist, this.service.soundSpeedAt(camEnu.z), scale,
+      azimuthDegOf(muzzle.x - camEnu.x, muzzle.y - camEnu.y),
+    );
+  }
+
+  /**
+   * P-VIVO.5 — impacto ESTRUCTURAL: explosión en la fachada/tejado (bola de
+   * fuego + humo + audio, SIN cráter ni quemadura pegada a una pared
+   * vertical) y recorte de la reproducción. El fallo del reto y onImpact
+   * usan el punto recortado. La física nunca se enteró: es presentación.
+   */
+  private handleStructuralImpact(point: Vec3, missM: number): void {
+    this.impacted = true;
+    this.mesh.visible = false;
+    this.shock.set(this.mesh.position, new THREE.Vector3(0, 0, -1), 0);
+    this.trail.finish();
+    this.audio.whistleStop(this);
+
+    this.vfx.structureExplosion(point, this.yieldScale);
+    const camEnu = this.overlay.cameraEnu();
+    const dist = camEnu.distanceTo(new THREE.Vector3(point.x, point.y, point.z));
+    this.audio.boom(
+      'impact', dist, this.service.soundSpeedAt(point.z), this.yieldScale,
+      azimuthDegOf(point.x - camEnu.x, point.y - camEnu.y),
+    );
+    if (this.flight.warheadTNTeq >= 0.05) {
+      toast(`🏢 Impacto en estructura a ${missM.toFixed(0)} m del objetivo`);
+    }
+
+    const impactSpeed = this.evaluate(Math.min(this.elapsed, this.flightDuration)).vel.length();
+    this.onImpact?.(point, this.yieldScale, impactSpeed);
+    this.disposeAt = performance.now() / 1000 + 6.0;
   }
 
   private handleImpact(): void {
@@ -255,30 +368,64 @@ export class ProjectilePresenter {
     this.mesh.visible = false;
     this.shock.set(this.mesh.position, new THREE.Vector3(0, 0, -1), 0);
     this.trail.finish();
-
-    this.vfx.impactExplosion(impact, this.yieldScale);
-    // P-NEXT.7 — huella persistente: quemadura + labio de tierra. El decal se
-    // clava al SUELO VISUAL (teselas 3D / terreno real): la z de física puede
-    // diferir de lo que se ve (corredor interpolado, edificios de Google).
-    // Las balas (sin carga explosiva) no dejan cráter: solo polvareda.
-    if (this.craters && this.flight.warheadTNTeq >= 0.05) {
-      const craters = this.craters;
-      const yieldEq = this.flight.warheadTNTeq;
-      this.service
-        .visualGroundZ(impact)
-        .then((z) => craters.add(z !== null ? new Vec3(impact.x, impact.y, z) : impact, yieldEq))
-        .catch(() => craters.add(impact, yieldEq));
-    }
+    this.audio.whistleStop(this); // P-VIVO.1 — el silbido muere con el impacto
 
     const camEnu = this.overlay.cameraEnu();
     const dist = camEnu.distanceTo(new THREE.Vector3(impact.x, impact.y, impact.z));
-    this.audio.boom('impact', dist, this.service.soundSpeedAt(impact.z), this.yieldScale);
+    const azFromCam = azimuthDegOf(impact.x - camEnu.x, impact.y - camEnu.y);
+    const payload = this.weapon.round.payload;
+
+    if (payload === 'illum') {
+      // P-VIVO.8 — ILLUM: NADA explota. La carga expulsora despliega la
+      // bengala en el punto de detonación (espoleta de tiempo) y cuelga del
+      // viento real. El suelo bajo la bengala = detonación - altura de burst.
+      const groundZ = impact.z - (this.flight.burstHeightM ?? 0);
+      this.vfx.flare(impact, groundZ);
+      this.audio.boom('rifle', dist, this.service.soundSpeedAt(impact.z), 0.4, azFromCam);
+    } else if (payload === 'smoke') {
+      // P-VIVO.8 — SMOKE: sin explosión ni cráter; cortina perpendicular al
+      // rumbo de llegada que deriva con el viento de superficie.
+      const vel = this.velocityEnu();
+      const bearing = azimuthDegOf(vel.x, vel.y);
+      this.vfx.smokeScreen(impact, bearing, Math.max(0.8, this.weapon.round.diameter / 0.155));
+      this.audio.boom('impact', dist, this.service.soundSpeedAt(impact.z), 0.15, azFromCam);
+    } else if (this.impactSurface === 'water' && this.flight.detonation === 'ground') {
+      // P-VIVO.4 — el mar responde COMO MAR: columna de agua + anillos +
+      // spray, boom ahogado, y NI cráter NI quemadura flotando en el agua.
+      this.vfx.waterSplash(impact, Math.max(0.25, this.yieldScale));
+      this.audio.boom(
+        'impactWater', dist, this.service.soundSpeedAt(impact.z),
+        Math.max(0.2, this.yieldScale), azFromCam,
+      );
+    } else {
+      this.vfx.impactExplosion(impact, this.yieldScale);
+      // P-NEXT.7 — huella persistente: quemadura + labio de tierra. El decal
+      // se clava al SUELO VISUAL (teselas 3D / terreno real): la z de física
+      // puede diferir de lo que se ve. Las balas (sin carga explosiva) no
+      // dejan cráter, y una detonación AÉREA (espoleta de tiempo/proximidad,
+      // P-VIVO.3) tampoco: la huella del airburst es de fragmentos, no hoyo.
+      const buriesCrater =
+        this.craters && !this.opts.noCrater &&
+        this.flight.warheadTNTeq >= 0.05 && this.flight.detonation !== 'air';
+      if (buriesCrater) {
+        const craters = this.craters!;
+        const yieldEq = this.flight.warheadTNTeq;
+        this.service
+          .visualGroundZ(impact)
+          .then((z) => craters.add(z !== null ? new Vec3(impact.x, impact.y, z) : impact, yieldEq))
+          .catch(() => craters.add(impact, yieldEq));
+      }
+      this.audio.boom(
+        'impact', dist, this.service.soundSpeedAt(impact.z), this.yieldScale, azFromCam,
+      );
+    }
 
     this.onImpact?.(impact, this.yieldScale, this.flight.impactSpeed);
     this.disposeAt = performance.now() / 1000 + 6.0; // deja asentarse humo/cámara
   }
 
   dispose(): void {
+    this.audio.whistleStop(this);
     this.overlay.enuRoot.remove(this.mesh);
     this.mesh.traverse((o) => {
       if (o instanceof THREE.Mesh) {

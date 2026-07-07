@@ -27,6 +27,8 @@ export class WeatherPanel {
   private realBtn!: HTMLButtonElement;
   private modeLabel!: HTMLElement;
   private root!: HTMLElement;
+  /** P-VIVO.10 — refs de los sliders para poder restaurar un estado. */
+  private readonly inputs = new Map<string, { input: HTMLInputElement; out: HTMLOutputElement; unit: string }>();
 
   constructor(private readonly service: BallisticsService) {
     const el = document.getElementById('weatherPanel')!;
@@ -43,19 +45,19 @@ export class WeatherPanel {
     el.appendChild(this.slider('Viento', 0, 30, 1, this.windSpeed, 'm/s', (v) => {
       this.windSpeed = v;
       this.applyWind();
-    }));
+    }, 'wind'));
     el.appendChild(this.slider('Rumbo (desde)', 0, 355, 5, this.windBearing, 'º', (v) => {
       this.windBearing = v;
       this.applyWind();
-    }));
+    }, 'bearing'));
     el.appendChild(this.slider('Temperatura', -20, 40, 1, this.tempC, 'ºC', (v) => {
       this.tempC = v;
       this.applyAtmo();
-    }));
+    }, 'temp'));
     el.appendChild(this.slider('Presión', 950, 1050, 1, this.pressureHPa, 'hPa', (v) => {
       this.pressureHPa = v;
       this.applyAtmo();
-    }));
+    }, 'pressure'));
 
     const btns = document.createElement('div');
     btns.className = 'btn-grid';
@@ -141,7 +143,7 @@ export class WeatherPanel {
 
   private slider(
     label: string, min: number, max: number, step: number, value: number,
-    unit: string, onInput: (v: number) => void,
+    unit: string, onInput: (v: number) => void, refKey?: string,
   ): HTMLElement {
     const row = document.createElement('div');
     row.className = 'row';
@@ -160,7 +162,46 @@ export class WeatherPanel {
       onInput(Number(input.value));
     };
     row.append(lab, input, out);
+    if (refKey) this.inputs.set(refKey, { input, out, unit }); // P-VIVO.10
     return row;
+  }
+
+  // -- P-VIVO.10 — estado serializable (compartir por URL + sesión) ----------
+  getState(): { real: boolean; ws: number; wb: number; t: number; p: number } {
+    return {
+      real: this.realActive,
+      ws: this.windSpeed,
+      wb: this.windBearing,
+      t: this.tempC,
+      p: this.pressureHPa,
+    };
+  }
+
+  /** Restaura meteo manual (mueve sliders y aplica la física de una vez). */
+  applyManual(ws: number, wb: number, t: number, p: number): void {
+    this.realActive = false;
+    this.profileActive = false;
+    this.realBtn.classList.remove('toggled');
+    this.windSpeed = ws;
+    this.windBearing = wb;
+    this.tempC = t;
+    this.pressureHPa = p;
+    for (const [key, val] of [['wind', ws], ['bearing', wb], ['temp', t], ['pressure', p]] as const) {
+      const ref = this.inputs.get(key);
+      if (ref) {
+        ref.input.value = String(val);
+        ref.out.textContent = `${val} ${ref.unit}`;
+      }
+    }
+    this.service.setSteadyWind(ws, wb);
+    this.service.setSeaLevelConditions(t + 273.15, p * 100);
+    this.modeLabel.textContent = 'Meteo restaurada del enlace/sesión (manual).';
+    this.onChange?.();
+  }
+
+  /** Restaura el modo de meteo REAL (re-consulta Open-Meteo aquí y ahora). */
+  async applyReal(): Promise<void> {
+    await this.loadRealWeather(true);
   }
 
   private applyWind(): void {

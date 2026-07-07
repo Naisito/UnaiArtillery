@@ -43,6 +43,13 @@ export class Weapon {
    * estándar, == round). El panel muestra el selector solo si hay >1.
    */
   rounds?: Munition[];
+  /**
+   * P-VIVO.2 — cadencia sostenida (disparos/min) de armas automáticas.
+   * Definida => el botón FUEGO pasa a MANTENER (ráfaga); ausente = tiro a tiro.
+   */
+  rateOfFireRpm?: number;
+  /** P-VIVO.2 — 1 trazadora cada N balas en ráfaga (0 = sin trazadoras). */
+  tracerEvery = 5;
 
   clone(): Weapon {
     const w = new Weapon();
@@ -103,6 +110,74 @@ export class WeaponCatalog {
     return m;
   }
 
+  // ==========================================================================
+  //  P-VIVO.8 — municiones de misión: iluminación (ILLUM) y humo (SMOKE).
+  //  Misma aerodinámica de clase que la HE de su calibre (la balística es
+  //  real); el 'payload' solo cambia la PRESENTACIÓN al detonar.
+  // ==========================================================================
+
+  /** M485 155 mm ILLUM: bengala de ~1 Mcd con paracaídas, ~50 s de luz. */
+  static illum155(): Munition {
+    const m = new Munition();
+    m.name = 'M485 ILLUM (bengala)';
+    m.mass = 41.7;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 0.01; // carga expulsora, no explosivo: sin cráter
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 3.5; // casco base-eject, algo peor que la HE
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0;
+    m.rightHandTwist = true;
+    m.payload = 'illum';
+    return m;
+  }
+
+  /** M825 155 mm SMOKE (WP en fieltro): cortina de ~90 s que deriva. */
+  static smoke155(): Munition {
+    const m = new Munition();
+    m.name = 'M825 SMOKE (cortina)';
+    m.mass = 46.8;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 684.0;
+    m.warheadMassTNTeq = 0.01;
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = 3.6;
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0;
+    m.rightHandTwist = true;
+    m.payload = 'smoke';
+    return m;
+  }
+
+  /** M91 120 mm ILLUM de mortero: ~600 kcd, ~60 s bajo paracaídas. */
+  static illum120(): Munition {
+    const m = new Munition();
+    m.name = 'M91 ILLUM (bengala)';
+    m.mass = 13.2;
+    m.diameter = 0.12;
+    m.muzzleVelocity = 318.0;
+    m.warheadMassTNTeq = 0.01;
+    m.dragModel = 'G1';
+    m.ballisticCoefficient = 1.6;
+    m.payload = 'illum';
+    return m;
+  }
+
+  /** M929 120 mm SMOKE de mortero (WP). */
+  static smoke120(): Munition {
+    const m = new Munition();
+    m.name = 'M929 SMOKE (cortina)';
+    m.mass = 13.6;
+    m.diameter = 0.12;
+    m.muzzleVelocity = 318.0;
+    m.warheadMassTNTeq = 0.01;
+    m.dragModel = 'G1';
+    m.ballisticCoefficient = 1.62;
+    m.payload = 'smoke';
+    return m;
+  }
+
   // ---- Light/medium mortar: 120 mm --------------------------------------
   // ~13 kg fin-stabilized bomb, high-angle only, ~7-8 km with top charge.
   static mortar120(variant: CatalogVariant = 'bc'): Weapon {
@@ -139,6 +214,10 @@ export class WeaponCatalog {
       { name: 'Charge 4', muzzleVelocity: 265.0 },
       { name: 'Charge 6 (max)', muzzleVelocity: 318.0 },
     ];
+    if (variant !== 'legacy') {
+      // P-VIVO.8 — misión: HE / iluminación / humo (legacy pura para paridad).
+      w.rounds = [m, WeaponCatalog.illum120(), WeaponCatalog.smoke120()];
+    }
     return w;
   }
 
@@ -184,7 +263,11 @@ export class WeaponCatalog {
     ];
     if (variant !== 'legacy') {
       // P-PRO.4 — munición seleccionable (la legacy queda pura para paridad).
-      w.rounds = [m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap()];
+      // P-VIVO.8 añade las rondas de misión ILLUM y SMOKE.
+      w.rounds = [
+        m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap(),
+        WeaponCatalog.illum155(), WeaponCatalog.smoke155(),
+      ];
     }
     return w;
   }
@@ -537,24 +620,28 @@ export class WeaponCatalog {
 
   /** Ametralladora 7.62×51 NATO (M80 147 gr, G7 0.195). Alcance máx ~4 km. */
   static mg762(): Weapon {
-    return WeaponCatalog.smallArm({
+    const w = WeaponCatalog.smallArm({
       name: 'M240 · AMT 7.62 NATO', roundName: '7.62×51 M80 147 gr',
       massKg: 0.00952, diameterM: 0.00782, v0: 850,
       dragModel: 'G7', bc: 0.195,
       twistCalibers: 39, // 1:12" en calibre .308
       maxElevationDeg: 60, reloadTime: 0.12,
     });
+    w.rateOfFireRpm = 750; // P-VIVO.2 — cadencia sostenida real de la M240
+    return w;
   }
 
   /** M2 Browning 12.7×99 (.50 M33 660 gr, G7 0.35). Alcance máx ~6.8 km. */
   static m2browning(): Weapon {
-    return WeaponCatalog.smallArm({
+    const w = WeaponCatalog.smallArm({
       name: 'M2 Browning · .50 BMG', roundName: '12.7×99 M33 660 gr',
       massKg: 0.0429, diameterM: 0.01295, v0: 890,
       dragModel: 'G7', bc: 0.35,
       twistCalibers: 29, // 1:15" en calibre .510
       maxElevationDeg: 60, reloadTime: 0.12,
     });
+    w.rateOfFireRpm = 550; // P-VIVO.2 — ~9 disparos/s de la M2 HB
+    return w;
   }
 
   static get(id: WeaponId, variant: CatalogVariant = 'bc'): Weapon {
