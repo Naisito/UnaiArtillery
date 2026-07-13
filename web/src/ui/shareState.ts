@@ -115,7 +115,11 @@ export function decodeState(hash: string): ShareState {
   const num = (x: unknown, fallback: number): number =>
     typeof x === 'number' && Number.isFinite(x) ? x : fallback;
 
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
   // Se reconstruye SOLO lo que esta versión entiende: lo demás se ignora.
+  // Los rangos se ACOTAN: un enlace manipulado (el:9999, p:-1000) no puede
+  // desincronizar sliders ni fabricar una atmósfera NaN.
   const out: ShareState = {
     v: o.v,
     bat: { lat: bat.lat, lon: bat.lon },
@@ -123,12 +127,13 @@ export function decodeState(hash: string): ShareState {
     ri: Math.max(0, Math.floor(num(o.ri, 0))),
     ci: Math.floor(num(o.ci, -1)),
     az: ((num(o.az, 0) % 360) + 360) % 360,
-    el: num(o.el, 45),
+    el: clamp(num(o.el, 45), -10, 90),
   };
   if (o.high === true) out.high = true;
   const tgt = o.tgt as { e?: unknown; n?: unknown } | undefined;
   if (tgt && typeof tgt.e === 'number' && typeof tgt.n === 'number' &&
-      Number.isFinite(tgt.e) && Number.isFinite(tgt.n)) {
+      Number.isFinite(tgt.e) && Number.isFinite(tgt.n) &&
+      Math.abs(tgt.e) <= 1_500_000 && Math.abs(tgt.n) <= 1_500_000) {
     out.tgt = { e: tgt.e, n: tgt.n };
   }
   const wx = o.wx as Record<string, unknown> | undefined;
@@ -137,7 +142,10 @@ export function decodeState(hash: string): ShareState {
       ? { real: true }
       : {
           real: false,
-          ws: num(wx.ws, 0), wb: num(wx.wb, 270), t: num(wx.t, 15), p: num(wx.p, 1013.25),
+          ws: clamp(num(wx.ws, 0), 0, 30),
+          wb: ((num(wx.wb, 270) % 360) + 360) % 360,
+          t: clamp(num(wx.t, 15), -20, 40),
+          p: clamp(num(wx.p, 1013.25), 950, 1050),
         };
   }
   const tog = o.tog as Record<string, unknown> | undefined;

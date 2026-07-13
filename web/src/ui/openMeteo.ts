@@ -138,7 +138,9 @@ export async function fetchOpenMeteo(
     `?latitude=${latDeg.toFixed(4)}&longitude=${lonDeg.toFixed(4)}` +
     `&hourly=${fields}&wind_speed_unit=ms&forecast_hours=1&timezone=UTC`;
 
-  const res = await fetch(url);
+  // Timeout explícito: una conexión COLGADA (no fallida) dejaba el botón de
+  // meteo real deshabilitado minutos y bloqueaba la restauración de enlaces.
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Open-Meteo HTTP ${res.status}`);
   const data = parseOpenMeteo(await res.json(), batteryHeightM);
   cache.set(key, { at: Date.now(), data });

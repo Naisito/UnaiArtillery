@@ -219,7 +219,11 @@ class MuzzleFlashFX implements Effect {
   private age = 0;
   private readonly life = 0.22;
 
-  constructor(private readonly parent: THREE.Object3D, pos: THREE.Vector3, scale: number) {
+  constructor(
+    private readonly parent: THREE.Object3D,
+    pos: THREE.Vector3,
+    private readonly scale: number,
+  ) {
     this.core = makeGlowSprite(0xfff6d8, 7 * scale);
     this.halo = makeGlowSprite(0xffa03a, 16 * scale);
     this.core.position.copy(pos);
@@ -235,7 +239,7 @@ class MuzzleFlashFX implements Effect {
     const env = (1 - t) * (1 - t); // ataque instantáneo, caída rápida
     (this.core.material as THREE.SpriteMaterial).opacity = env;
     (this.halo.material as THREE.SpriteMaterial).opacity = env * 0.7;
-    this.light.intensity = 60000 * env;
+    this.light.intensity = 60000 * this.scale * env; // la escala del arma se mantiene
     return t < 1;
   }
 

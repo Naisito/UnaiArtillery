@@ -661,6 +661,9 @@ export class WeaponCatalog {
       case 'mg762': return WeaponCatalog.mg762();
       case 'm2browning': return WeaponCatalog.m2browning();
     }
+    // Id externo no validado (enlace compartido manipulado): error legible
+    // en vez de un TypeError críptico aguas abajo.
+    throw new Error(`WeaponCatalog: arma desconocida '${id as string}'`);
   }
 
   static all(variant: CatalogVariant = 'bc'): Weapon[] {

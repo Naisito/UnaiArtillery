@@ -299,9 +299,11 @@ export class ProjectilePresenter {
       this.audio.boom('crack', dist, this.service.soundSpeedAt(camEnu.z), 0.8, azFromCam);
     }
 
-    // P-VIVO.1 — silbido terminal: solo subsónico y a <500 m (audioMath
-    // decide; aquí solo alimentamos Mach/distancia/acimut cada frame).
-    this.audio.whistleTick(this, s.mach, dist, azFromCam);
+    // P-VIVO.1 — silbido TERMINAL: solo en rama descendente (un mortero
+    // subsónico saliendo junto a la cámara no debe silbar en la salida),
+    // subsónico y a <500 m (audioMath decide ganancia/frecuencia).
+    if (s.vel.z < 0) this.audio.whistleTick(this, s.mach, dist, azFromCam);
+    else this.audio.whistleStop(this);
     return true;
   }
 
@@ -425,6 +427,10 @@ export class ProjectilePresenter {
   }
 
   dispose(): void {
+    // Sin esto la estela queda ZOMBI: TrailFX.update devuelve true mientras
+    // no esté "dead", así que una evicción FIFO en ráfagas largas acumulaba
+    // efectos inmortales (y el glow del motor colgado en el aire).
+    this.trail.finish();
     this.audio.whistleStop(this);
     this.overlay.enuRoot.remove(this.mesh);
     this.mesh.traverse((o) => {

@@ -200,6 +200,14 @@ async function boot(): Promise<void> {
 
   /** Re-ancla el marco ENU en (lon, lat) y refresca todo lo que depende de él. */
   async function reanchorBattery(lonDeg: number, latDeg: number): Promise<void> {
+    // TODO lo que vive en coordenadas del marco VIEJO se desmonta antes de
+    // reorientar el grupo ENU: proyectiles en vuelo, VFX persistentes
+    // (cortinas de humo, bengalas), cráteres e impactos del minimapa
+    // aparecerían teletransportados alrededor del ancla nueva.
+    piece.disposeAllFlights();
+    vfx.dispose();
+    craters.clear();
+    gunnerHud.clearImpacts();
     await service.setBattery(lonDeg, latDeg);
     overlay.setFrame(service.frame);
     preview.clearAll();
@@ -245,11 +253,13 @@ async function boot(): Promise<void> {
   // de dron. Estado ligero alimentado por los hooks de preview/anillos.
   let lastPreview: FlightResult | null = null;
   let lastRing: RangeRing | null = null;
+  let ringToken = 0; // gana el último PEDIDO, no el último en resolver
   const refreshRing = () => {
+    const token = ++ringToken;
     void service
       .approxMaxRange(panel.weaponId, panel.chargeIndex)
-      .then((r) => { lastRing = r; })
-      .catch(() => { lastRing = null; });
+      .then((r) => { if (token === ringToken) lastRing = r; })
+      .catch(() => { if (token === ringToken) lastRing = null; });
   };
   refreshRing();
   const gunnerHud = new GunnerHud({
@@ -289,6 +299,7 @@ async function boot(): Promise<void> {
   weather.onChange = () => {
     piece.schedulePreview(250);
     firingTable.notifyChanged();
+    refreshRing(); // la meteo cambia el alcance máximo (anillos/minimapa)
   };
 
   // P-VIVO.7 — blanco móvil: el actor vive aquí (Three + muestreo de camino).
@@ -469,6 +480,14 @@ async function boot(): Promise<void> {
     }
   }
 
+  /** Quita el #s=… de la barra sin recargar (el hash clavado haría que
+   *  cualquier F5 posterior revirtiera al escenario del enlace). */
+  function clearShareHash(): void {
+    if (window.location.hash) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }
+
   function shareScenario(): void {
     try {
       const enc = encodeState(collectState());
@@ -477,7 +496,10 @@ async function boot(): Promise<void> {
       const url = window.location.href;
       if (navigator.clipboard?.writeText) {
         navigator.clipboard.writeText(url).then(
-          () => toast('🔗 URL copiada — este escenario viaja entero en el enlace'),
+          () => {
+            toast('🔗 URL copiada — este escenario viaja entero en el enlace');
+            clearShareHash(); // ya está en el portapapeles: que F5 siga tu sesión
+          },
           () => toast('🔗 URL lista en la barra de direcciones — cópiala'),
         );
       } else {
@@ -496,6 +518,7 @@ async function boot(): Promise<void> {
       // sin almacenamiento
     }
     sessionAutosave = false; // que no se re-guarde sola tras el borrado
+    clearShareHash(); // si no, el hash restauraría el escenario igualmente
     toast('Sesión borrada — recarga para arrancar de fábrica');
   }
 
@@ -578,13 +601,22 @@ async function boot(): Promise<void> {
   viewer.scene.postRender.addEventListener(() => overlay.render());
 
   // P-VIVO.11 — pestañas de paneles en pantallas estrechas + tutorial guiado.
-  installPanelTabs();
+  const panelTabs = installPanelTabs();
   const TUTORIAL_ANCHORS = [
     'weaponSelect', 'cockpit', 'fireBtn', 'pickTargetBtn', 'disperseBtn', 'challengeBtn',
   ];
-  tutorial = new Tutorial((step) =>
-    document.getElementById(TUTORIAL_ANCHORS[step] ?? '') ?? null,
-  );
+  tutorial = new Tutorial((step) => {
+    const el = document.getElementById(TUTORIAL_ANCHORS[step] ?? '');
+    if (!el) return null;
+    // En móvil el ancla puede vivir en un panel plegado (display:none →
+    // rect 0×0 y el globo señalaría la nada): ábrelo antes de resaltar.
+    if (window.matchMedia('(max-width: 900px)').matches && el.offsetParent === null) {
+      const panel = el.closest('#controlPanel, #weatherPanel, #cockpit');
+      const panelId = panel?.id ?? (el.id === 'cockpit' ? 'cockpit' : null);
+      if (panelId) panelTabs.open(panelId);
+    }
+    return el;
+  });
 
   // P-VIVO.10 — repetición del último vuelo desde el HUD.
   hud.onReplay = (camera, slow) => {
@@ -604,21 +636,32 @@ async function boot(): Promise<void> {
       toast('🔗 Escenario restaurado del enlace');
     } catch (err) {
       console.warn('[share] hash inválido', err);
-      history.replaceState(null, '', window.location.pathname + window.location.search);
       toast(`Enlace inválido (${(err as Error).message}) — arranco normal`);
       piece.schedulePreview(400);
     }
+    // Consumido (bien o mal): si se quedara clavado, cada F5 posterior
+    // revertiría silenciosamente al escenario del enlace en vez de a tu
+    // sesión autosalvada.
+    clearShareHash();
   } else {
-    let restored = false;
+    // Decodificar y restaurar por separado: solo una sesión CORRUPTA se
+    // borra; un fallo transitorio al restaurar (red, terreno) la conserva.
+    let decoded: ShareState | null = null;
     try {
       const saved = localStorage.getItem(SESSION_KEY);
-      if (saved) {
-        await restoreState(decodeState(saved));
-        restored = true;
-      }
+      if (saved) decoded = decodeState(saved);
     } catch (err) {
       console.warn('[session] sesión corrupta — borrada', err);
       try { localStorage.removeItem(SESSION_KEY); } catch { /* sin almacenamiento */ }
+    }
+    let restored = false;
+    if (decoded) {
+      try {
+        await restoreState(decoded);
+        restored = true;
+      } catch (err) {
+        console.warn('[session] fallo restaurando — la sesión guardada se conserva', err);
+      }
     }
     if (!restored) piece.schedulePreview(400); // primer arco al arrancar
   }

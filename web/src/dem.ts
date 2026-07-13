@@ -46,6 +46,9 @@ export async function sampleDem(
   cache: Map<string, number> = defaultCache,
 ): Promise<number[] | null> {
   if (points.length === 0) return [];
+  // Cota de la caché global: una sesión larga apuntando a muchos rumbos
+  // distintos no debe crecer sin límite (un corredor ≈ 800 claves).
+  if (cache.size > 20_000) cache.clear();
 
   // Puntos aún no cacheados, deduplicados por clave.
   const missing = new Map<string, LatLonDeg>();

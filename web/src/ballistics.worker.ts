@@ -44,7 +44,9 @@ function drainOne(): void {
 self.onmessage = (ev: MessageEvent<WorkerRequest | CancelMessage>) => {
   const msg = ev.data;
   if ('cancel' in msg) {
-    cancelled.add(msg.cancel);
+    // Solo tiene sentido cancelar lo que sigue EN COLA; un cancel para un job
+    // ya corriendo/respondido entraría al set y no saldría jamás (fuga).
+    if (queue.some((q) => q.id === msg.cancel)) cancelled.add(msg.cancel);
     return;
   }
   queue.push(msg);

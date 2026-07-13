@@ -54,6 +54,8 @@ export class ForwardObserver {
   private aimPoint: Vec3 | null = null;
   private rounds = 0;
   private scored = false;
+  /** Estado de la parábola ANTES del reto (para restaurarla de verdad). */
+  private savedArc: boolean | null = null;
 
   private startBtn!: HTMLButtonElement;
   private surrenderBtn!: HTMLButtonElement;
@@ -67,7 +69,8 @@ export class ForwardObserver {
     private readonly hooks: ForwardObserverHooks,
   ) {
     // Botonera dentro de la sección "Instrucción" (creada por Challenge).
-    const host = document.getElementById('controlPanel')!;
+    const host =
+      document.getElementById('instructionHost') ?? document.getElementById('controlPanel')!;
     const row = document.createElement('div');
     row.className = 'btn-grid';
     this.startBtn = document.createElement('button');
@@ -145,9 +148,11 @@ export class ForwardObserver {
   private async start(): Promise<void> {
     this.startBtn.disabled = true;
     this.hooks.onStart?.(); // el reto clásico muere si estaba vivo
+    const weaponAtStart = this.panel.weaponId;
+    const chargeAtStart = this.panel.chargeIndex;
     try {
-      const id = this.panel.weaponId;
-      const ring = await this.service.approxMaxRange(id, this.panel.chargeIndex);
+      const id = weaponAtStart;
+      const ring = await this.service.approxMaxRange(id, chargeAtStart);
       // La semilla del reloj SOLO aquí — la lógica del anillo/OP es pura.
       const spec = pickTargetInRing(Math.random, ring.maxRangeM, ring.minRangeM);
 
@@ -175,6 +180,12 @@ export class ForwardObserver {
       }
       if (!op) throw new Error('sin candidatos de OP');
 
+      // Si el usuario cambió de arma/carga durante el planteo (awaits de
+      // terreno/LOS), este reto es del arma anterior: abortar en silencio.
+      if (this.panel.weaponId !== weaponAtStart || this.panel.chargeIndex !== chargeAtStart) {
+        return;
+      }
+
       // Estimación inicial del FO: el objetivo con un error de 100-350 m
       // (la llamada de fuego inicial nunca es exacta: por eso se corrige).
       const errAng = Math.random() * Math.PI * 2;
@@ -194,6 +205,7 @@ export class ForwardObserver {
       // se pinta (el FO tiene que VER su objetivo para corregir).
       this.hooks.marker(target);
       this.hooks.lockPick(true);
+      this.savedArc = this.panel.arcChecked; // restaurar EXACTAMENTE esto al salir
       this.hooks.setArc(false);
       const lookAz = ((Math.atan2(target.x - op.x, target.y - op.y) * 180) / Math.PI + 360) % 360;
       this.hooks.enterOpCamera(new Vec3(op.x, op.y, op.z + 1.7), lookAz);
@@ -326,9 +338,12 @@ export class ForwardObserver {
     if (wasActive) {
       this.hooks.marker(null);
       this.hooks.lockPick(false);
-      this.hooks.setArc(true);
+      // Restaura el estado REAL previo al reto: quien jugaba en modo
+      // inmersión (parábola OFF) no debe salir con ella forzada a ON.
+      this.hooks.setArc(this.savedArc ?? true);
       this.hooks.exitOpCamera();
     }
+    this.savedArc = null;
   }
 
   private showRecord(): void {

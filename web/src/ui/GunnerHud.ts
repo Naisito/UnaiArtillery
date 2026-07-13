@@ -133,6 +133,11 @@ export class GunnerHud {
     this.tileKey = '';
   }
 
+  /** La batería se movió: los impactos eran ENU del marco anterior. */
+  clearImpacts(): void {
+    this.impacts = [];
+  }
+
   render(dt: number): void {
     this.clock += dt;
     for (const i of this.impacts) i.age += dt;
@@ -303,10 +308,21 @@ export class GunnerHud {
     ctx.arc(cx, cx, R, 0, Math.PI * 2);
     ctx.clip();
 
-    // Fondo: teselas OSM atenuadas, o rejilla táctica si no hay mapa.
+    // Fondo: rejilla táctica SIEMPRE debajo (si una tesela OSM falla o tarda,
+    // su hueco muestra rejilla en vez de un agujero negro) + teselas encima.
     ctx.fillStyle = 'rgba(9, 13, 17, 0.9)';
     ctx.fillRect(0, 0, S, S);
-    let drewMap = false;
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = DPR;
+    const gridStep = (maxR / 4) * pxPerMeter;
+    for (let k = -4; k <= 4; k++) {
+      ctx.beginPath();
+      ctx.moveTo(cx + k * gridStep, 0);
+      ctx.lineTo(cx + k * gridStep, S);
+      ctx.moveTo(0, cx + k * gridStep);
+      ctx.lineTo(S, cx + k * gridStep);
+      ctx.stroke();
+    }
     const tileScale = this.tileMpp * pxPerMeter; // px de canvas por px de tesela
     for (const t of this.tiles) {
       if (!t.loaded) continue;
@@ -319,20 +335,6 @@ export class GunnerHud {
         256 * tileScale,
       );
       ctx.filter = 'none';
-      drewMap = true;
-    }
-    if (!drewMap) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-      ctx.lineWidth = DPR;
-      const step = (maxR / 4) * pxPerMeter;
-      for (let k = -4; k <= 4; k++) {
-        ctx.beginPath();
-        ctx.moveTo(cx + k * step, 0);
-        ctx.lineTo(cx + k * step, S);
-        ctx.moveTo(0, cx + k * step);
-        ctx.lineTo(S, cx + k * step);
-        ctx.stroke();
-      }
     }
 
     // Coordenadas ENU -> canvas (norte arriba).

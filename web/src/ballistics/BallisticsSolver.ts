@@ -63,6 +63,13 @@ export class SolverConfig {
   groundZ = 0.0;       // impact plane altitude (ENU z) unless terrainHeight set
   enableCoriolis = true;
   latitudeDeg = 40.0;  // battery latitude (Coriolis; ECEF anchor in spherical)
+  /**
+   * Altitud MSL del suelo de la batería (m). El marco de integración ancla
+   * z=0 en ese suelo, pero la atmósfera se define sobre el nivel del mar:
+   * densidad/Mach se muestrean en z + anchorAltitudeM. Con 0 (default) la
+   * integración es bit a bit la validada contra el core C++.
+   */
+  anchorAltitudeM = 0.0;
   gravity = new Vec3(0.0, 0.0, -9.80665);
   sampleEvery = 1;     // store 1 of every N steps (path decimation)
 
@@ -202,6 +209,9 @@ export class BallisticsSolver {
     const launchFramePos = s.pos.clone();
 
     this.pushSample(out, ctx, s, t);
+    // El ápice arranca en la altitud de LANZAMIENTO: un tiro tenso cuesta
+    // abajo (todo el vuelo bajo z=0) reporta su vértice real, no 0.
+    out.apex = ops.altitude(s.pos);
 
     // Con TERRENO real, un tiro tenso puede comerse una ladera que sube más
     // deprisa que él (máscara de cresta): el cruce cuenta también en fase
@@ -410,7 +420,7 @@ export class BallisticsSolver {
     const cfg = this.cfg;
 
     const alt = ops.altitude(s.pos);
-    const air = this.atmo.sample(alt);
+    const air = this.atmo.sample(alt + cfg.anchorAltitudeM);
     const wind = ops.wind(s.pos, t);
     const vRel = s.vel.sub(wind); // airspeed vector
     const vRelMag = vRel.length();
@@ -445,7 +455,9 @@ export class BallisticsSolver {
     let dmdt = 0.0;
     const tBurn = t - round.motor.ignitionDelayS;
     if (round.motor.enabled && tBurn >= 0.0 && tBurn < round.motor.burnTime && s.mass > 0.0) {
-      const dir = vRelMag > 1e-6 ? s.vel.normalized() : ops.up(s.pos);
+      // La rama vertical cubre v≈0 ABSOLUTA (cohete en rampa con brisa):
+      // vRelMag>0 con |v|=0 normalizaría el vector cero y anularía el empuje.
+      const dir = s.vel.length() > 1e-6 ? s.vel.normalized() : ops.up(s.pos);
       aThrust = dir.mul(round.motor.thrust / s.mass);
       dmdt = -round.motor.propellantMass / round.motor.burnTime;
     }
@@ -528,7 +540,7 @@ export class BallisticsSolver {
 
   private pushSample(out: FlightResult, ctx: IntegrationContext, s: State, t: number): void {
     const ops = ctx.ops;
-    const air = this.atmo.sample(ops.altitude(s.pos));
+    const air = this.atmo.sample(ops.altitude(s.pos) + this.cfg.anchorAltitudeM);
     const wind = ops.wind(s.pos, t);
     const vRel = s.vel.sub(wind);
     const vRelMag = vRel.length();

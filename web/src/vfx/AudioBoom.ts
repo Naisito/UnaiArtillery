@@ -208,6 +208,12 @@ export class AudioBoom {
     if (!this.ctx || !this.noise || !this.master) return;
     const { gain, freqHz } = whistleParams(mach, distanceM);
     let v = this.whistles.get(key);
+    // Voz inaudible y proyectil lejos: desmonta el grafo (osc + ruido en loop
+    // + biquad quemaban CPU todo el vuelo). Si vuelve a <500 m se recrea.
+    if (v && gain <= 0 && distanceM > 600) {
+      this.whistleStop(key);
+      return;
+    }
     if (!v) {
       if (gain <= 0) return; // nada que arrancar
       const noise = this.ctx.createBufferSource();

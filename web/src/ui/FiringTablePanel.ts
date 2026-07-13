@@ -113,7 +113,11 @@ export class FiringTablePanel {
     } catch (err) {
       if ((err as Error)?.name === 'SupersededError' || err instanceof SupersededError) return;
       console.error('[firing-table]', err);
-      if (seq === this.fetchSeq) this.statusEl.textContent = 'No se pudo calcular la tabla.';
+      if (seq === this.fetchSeq) {
+        this.statusEl.textContent = 'No se pudo calcular la tabla.';
+        // La tabla anterior sigue renderizada: su CSV sigue siendo válido.
+        this.csvBtn.disabled = this.table === null;
+      }
     }
   }
 
@@ -156,11 +160,14 @@ export class FiringTablePanel {
         td.textContent = cell;
         tr.appendChild(td);
       }
-      const qe = this.rowQE(row);
-      if (qe !== null) {
+      if (row.qeLowDeg !== null || row.qeHighDeg !== null) {
         tr.classList.add('aimable');
-        tr.title = `Apuntar: QE ${qe.toFixed(2)}º al azimut actual`;
+        tr.title = 'Apuntar a este alcance (rama según "Rama alta") al azimut actual';
         tr.onclick = () => {
+          // La QE se decide AL CLICAR, no al renderizar: si el usuario cambió
+          // "Rama alta" con la tabla abierta, manda la preferencia vigente.
+          const qe = this.rowQE(row);
+          if (qe === null) return;
           this.panel.setAim(this.panel.azimuthDeg, qe);
           this.schedulePreview();
         };

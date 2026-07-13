@@ -142,6 +142,7 @@ export class ControlPanel {
     // P-PRO.4 — selector de munición; solo visible si el arma ofrece >1.
     this.roundSelect = document.createElement('select');
     this.roundSelect.title = 'Munición: estándar, base bleed o cohete auxiliar (RAP)';
+    this.roundSelect.setAttribute('aria-label', 'Munición');
     this.roundSelect.onchange = () => {
       this.roundIndex = Number(this.roundSelect.value);
       this.cb.onRoundChanged(this.roundIndex);
@@ -149,6 +150,8 @@ export class ControlPanel {
     el.appendChild(this.roundSelect);
 
     this.chargeSelect = document.createElement('select');
+    this.chargeSelect.setAttribute('aria-label', 'Carga de proyección');
+    this.chargeSelect.title = 'Carga de proyección: más carga = más V0 y alcance';
     this.chargeSelect.onchange = () => {
       this.chargeIndex = Number(this.chargeSelect.value);
       this.cb.onChargeChanged();
@@ -164,15 +167,17 @@ export class ControlPanel {
     azRow.className = 'row';
     const azLab = document.createElement('label');
     azLab.textContent = 'Azimut';
+    azLab.htmlFor = 'azimuthInput';
     this.azInput = document.createElement('input');
     this.azInput.type = 'range';
+    this.azInput.id = 'azimuthInput';
     this.azInput.min = '0';
-    this.azInput.max = '359';
+    this.azInput.max = '360'; // 360 ≡ 0: sin ello [359.5, 360) era inalcanzable
     this.azInput.step = '0.5';
     this.azInput.value = String(this.azimuthDeg);
     this.azOut = document.createElement('output');
     this.azInput.oninput = () => {
-      this.azimuthDeg = Number(this.azInput.value);
+      this.azimuthDeg = Number(this.azInput.value) % 360;
       this.azOut.textContent = `${this.azimuthDeg.toFixed(1)}º`;
       this.cb.onAimChanged();
     };
@@ -183,8 +188,10 @@ export class ControlPanel {
     elRow.className = 'row';
     const elLab = document.createElement('label');
     elLab.textContent = 'Elevación';
+    elLab.htmlFor = 'elevationInput';
     this.elInput = document.createElement('input');
     this.elInput.type = 'range';
+    this.elInput.id = 'elevationInput';
     this.elInput.step = '0.1';
     this.elOut = document.createElement('output');
     this.elInput.oninput = () => {
@@ -199,8 +206,10 @@ export class ControlPanel {
     highRow.className = 'row';
     const highLab = document.createElement('label');
     highLab.textContent = 'Rama alta (morterazo)';
+    highLab.htmlFor = 'highAngleCheck';
     this.highCheckbox = document.createElement('input');
     this.highCheckbox.type = 'checkbox';
+    this.highCheckbox.id = 'highAngleCheck';
     this.highCheckbox.onchange = () => {
       this.preferHighAngle = this.highCheckbox.checked;
       this.cb.onAimChanged();
@@ -213,8 +222,10 @@ export class ControlPanel {
     const arcLab = document.createElement('label');
     arcLab.textContent = 'Parábola (preview)';
     arcLab.title = 'Desmárcalo para ver solo el proyectil en vuelo, sin el arco previsto';
+    arcLab.htmlFor = 'arcCheck';
     this.arcCheckbox = document.createElement('input');
     this.arcCheckbox.type = 'checkbox';
+    this.arcCheckbox.id = 'arcCheck';
     this.arcCheckbox.checked = true;
     this.arcCheckbox.onchange = () => this.cb.onToggleArc(this.arcCheckbox.checked);
     arcRow.append(arcLab, this.arcCheckbox);
@@ -298,31 +309,6 @@ export class ControlPanel {
     this.fireBtn.addEventListener('pointercancel', stopBurst);
     el.appendChild(this.fireBtn);
 
-    // P-VIVO.1 — volumen master + mute (persisten vía AudioBoom).
-    const audioRow = document.createElement('div');
-    audioRow.className = 'row';
-    this.muteBtn = document.createElement('button');
-    this.muteBtn.textContent = '🔊';
-    this.muteBtn.title = 'Silenciar / restaurar el audio';
-    this.muteBtn.setAttribute('aria-label', 'Silenciar audio');
-    this.muteBtn.onclick = () => {
-      const muted = !this.muteBtn.classList.contains('toggled');
-      this.muteBtn.classList.toggle('toggled', muted);
-      this.muteBtn.textContent = muted ? '🔇' : '🔊';
-      this.cb.onMuteChanged(muted);
-    };
-    this.volInput = document.createElement('input');
-    this.volInput.type = 'range';
-    this.volInput.min = '0';
-    this.volInput.max = '100';
-    this.volInput.step = '1';
-    this.volInput.value = '80';
-    this.volInput.title = 'Volumen master';
-    this.volInput.setAttribute('aria-label', 'Volumen master');
-    this.volInput.oninput = () => this.cb.onVolumeChanged(Number(this.volInput.value));
-    audioRow.append(this.muteBtn, this.volInput);
-    el.appendChild(audioRow);
-
     this.solutionEl = document.createElement('p');
     this.solutionEl.className = 'hint readout';
     el.appendChild(this.solutionEl);
@@ -332,10 +318,28 @@ export class ControlPanel {
     this.statusEl.textContent = 'Ajusta la puntería o marca un objetivo con 🎯.';
     el.appendChild(this.statusEl);
 
+    // Anfitrión de la sección "Instrucción" (Challenge/ForwardObserver se
+    // montan aquí): así los retos quedan junto a la operación del arma y no
+    // desterrados bajo la configuración de escena.
+    const instruction = document.createElement('div');
+    instruction.id = 'instructionHost';
+    el.appendChild(instruction);
+
+    /** Sección plegable (abierta por defecto): agrupa lo secundario sin
+     *  esconderlo — operar el arma queda arriba, configurar la escena abajo. */
+    const section = (title: string): HTMLElement => {
+      const d = document.createElement('details');
+      d.className = 'section';
+      d.open = true;
+      const s = document.createElement('summary');
+      s.textContent = title;
+      d.appendChild(s);
+      el.appendChild(d);
+      return d;
+    };
+
     // -- Cámara --------------------------------------------------------------
-    const camH = document.createElement('h3');
-    camH.textContent = 'Cámara';
-    el.appendChild(camH);
+    const camSection = section('Cámara');
     const camGrid = document.createElement('div');
     camGrid.className = 'btn-grid';
     const modes: [CameraMode, string, string?][] = [
@@ -361,10 +365,12 @@ export class ControlPanel {
     if (!('requestPointerLock' in HTMLElement.prototype)) {
       this.cameraBtns.get('fps')!.style.display = 'none';
     }
-    el.appendChild(camGrid);
+    camSection.appendChild(camGrid);
     this.markCamera('free');
 
-    // -- Mapa (P-NEXT.3) -------------------------------------------------------
+    // -- Escena (mapa, noche, audio, compartir) --------------------------------
+    const sceneSection = section('Escena');
+
     this.googleBtn = document.createElement('button');
     this.googleBtn.className = 'wide';
     this.googleBtn.setAttribute('aria-label', 'Edificios 3D fotorrealistas de Google');
@@ -372,10 +378,9 @@ export class ControlPanel {
     this.googleBtn.title =
       'Photorealistic 3D Tiles: ciudades reales. Solo visual — los impactos se calculan contra el terreno.';
     this.googleBtn.style.width = '100%';
-    this.googleBtn.style.marginTop = '6px';
     this.googleBtn.onclick = () =>
       this.cb.onGoogleTiles(!this.googleBtn.classList.contains('toggled'));
-    el.appendChild(this.googleBtn);
+    sceneSection.appendChild(this.googleBtn);
 
     // P-VIVO.8 — noche real: medianoche local de la batería + luna.
     this.nightBtn = document.createElement('button');
@@ -386,7 +391,33 @@ export class ControlPanel {
     this.nightBtn.style.width = '100%';
     this.nightBtn.style.marginTop = '6px';
     this.nightBtn.onclick = () => this.setNight(!this.nightActive, true);
-    el.appendChild(this.nightBtn);
+    sceneSection.appendChild(this.nightBtn);
+
+    // P-VIVO.1 — volumen master + mute (persisten vía AudioBoom).
+    const audioRow = document.createElement('div');
+    audioRow.className = 'row';
+    audioRow.style.marginTop = '6px';
+    this.muteBtn = document.createElement('button');
+    this.muteBtn.textContent = '🔊';
+    this.muteBtn.title = 'Silenciar / restaurar el audio';
+    this.muteBtn.setAttribute('aria-label', 'Silenciar audio');
+    this.muteBtn.onclick = () => {
+      const muted = !this.muteBtn.classList.contains('toggled');
+      this.muteBtn.classList.toggle('toggled', muted);
+      this.muteBtn.textContent = muted ? '🔇' : '🔊';
+      this.cb.onMuteChanged(muted);
+    };
+    this.volInput = document.createElement('input');
+    this.volInput.type = 'range';
+    this.volInput.min = '0';
+    this.volInput.max = '100';
+    this.volInput.step = '1';
+    this.volInput.value = '80';
+    this.volInput.title = 'Volumen master';
+    this.volInput.setAttribute('aria-label', 'Volumen master');
+    this.volInput.oninput = () => this.cb.onVolumeChanged(Number(this.volInput.value));
+    audioRow.append(this.muteBtn, this.volInput);
+    sceneSection.appendChild(audioRow);
 
     // P-VIVO.10 — compartir el escenario por URL + restablecer sesión.
     const shareRow = document.createElement('div');
@@ -402,7 +433,7 @@ export class ControlPanel {
     resetBtn.title = 'Borra la sesión guardada (la próxima carga arranca de fábrica)';
     resetBtn.onclick = () => this.cb.onResetSession();
     shareRow.append(shareBtn, resetBtn);
-    el.appendChild(shareRow);
+    sceneSection.appendChild(shareRow);
 
     this.rebuildRounds();
     this.rebuildCharges();
@@ -533,10 +564,15 @@ export class ControlPanel {
     this.azOut.textContent = `${this.azimuthDeg.toFixed(1)}º`;
   }
 
-  /** Fija az/el desde una solución de tiro (clic en objetivo). */
+  /** Fija az/el desde una solución de tiro (clic en objetivo) o un enlace.
+   *  La elevación se acota a la envolvente del arma: un enlace manipulado
+   *  (el:9999) no puede desincronizar el slider del estado. */
   setAim(azimuthDeg: number, elevationDeg: number): void {
+    const w = this.weapon();
     this.azimuthDeg = ((azimuthDeg % 360) + 360) % 360;
-    this.elevationDeg = elevationDeg;
+    this.elevationDeg = Math.min(
+      Math.max(elevationDeg, w.minElevationDeg), w.maxElevationDeg,
+    );
     this.azInput.value = String(this.azimuthDeg);
     this.elInput.value = String(this.elevationDeg);
     this.azOut.textContent = `${this.azimuthDeg.toFixed(1)}º`;

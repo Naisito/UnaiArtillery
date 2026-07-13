@@ -42,6 +42,8 @@ export interface FiringTableOptions {
   dt?: number;
   /** Latitude for Coriolis. Default 40. */
   latitudeDeg?: number;
+  /** Altitud MSL del suelo de la batería (misma corrección que el solver). */
+  anchorAltitudeM?: number;
   atmosphere?: Atmosphere;
   /**
    * P-VIVO.9 — factor multiplicativo sobre la V0 de la carga (temperatura de
@@ -68,6 +70,7 @@ export function generateFiringTable(
     dt: opts.dt ?? 0.005,
     enableCoriolis: true,
     latitudeDeg: opts.latitudeDeg ?? 40.0,
+    anchorAltitudeM: opts.anchorAltitudeM ?? 0.0,
   });
   const solver = new BallisticsSolver(atmo, cfg);
   const scale = opts.v0Scale ?? 1.0;

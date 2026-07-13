@@ -112,7 +112,8 @@ export class WeatherPanel {
     );
   }
 
-  private async loadRealWeather(silent: boolean): Promise<void> {
+  /** Devuelve si la meteo real quedó instalada (false = seguimos en manual). */
+  private async loadRealWeather(silent: boolean): Promise<boolean> {
     const frame = this.service.frame;
     this.realBtn.disabled = true;
     try {
@@ -133,13 +134,17 @@ export class WeatherPanel {
         toast(`Meteo real instalada: ${wx.levels.length} niveles de viento`);
       }
       this.onChange?.();
+      return true;
     } catch (err) {
       console.error('[open-meteo]', err);
       toast('Sin meteo real (¿red?) — sigue el modo manual');
+      return false;
     } finally {
       this.realBtn.disabled = false;
     }
   }
+
+  private static sliderSeq = 0;
 
   private slider(
     label: string, min: number, max: number, step: number, value: number,
@@ -151,6 +156,8 @@ export class WeatherPanel {
     lab.textContent = label;
     const input = document.createElement('input');
     input.type = 'range';
+    input.id = `wxSlider-${refKey ?? WeatherPanel.sliderSeq++}`;
+    lab.htmlFor = input.id; // nombre accesible + el label responde al clic
     input.min = String(min);
     input.max = String(max);
     input.step = String(step);
@@ -177,8 +184,16 @@ export class WeatherPanel {
     };
   }
 
-  /** Restaura meteo manual (mueve sliders y aplica la física de una vez). */
+  /** Restaura meteo manual (mueve sliders y aplica la física de una vez).
+   *  Los valores llegan de un enlace externo: se acotan a los rangos de los
+   *  sliders (una presión negativa haría NaN toda la atmósfera). */
   applyManual(ws: number, wb: number, t: number, p: number): void {
+    const clamp = (v: number, lo: number, hi: number) =>
+      Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo;
+    ws = clamp(ws, 0, 30);
+    wb = ((clamp(wb, -360, 720) % 360) + 360) % 360;
+    t = clamp(t, -20, 40);
+    p = clamp(p, 950, 1050);
     this.realActive = false;
     this.profileActive = false;
     this.realBtn.classList.remove('toggled');
@@ -199,9 +214,12 @@ export class WeatherPanel {
     this.onChange?.();
   }
 
-  /** Restaura el modo de meteo REAL (re-consulta Open-Meteo aquí y ahora). */
+  /** Restaura el modo de meteo REAL (re-consulta Open-Meteo aquí y ahora).
+   *  Rechaza si no se pudo (antes tragaba el error y el llamador de la
+   *  restauración nunca se enteraba de que seguía en meteo por defecto). */
   async applyReal(): Promise<void> {
-    await this.loadRealWeather(true);
+    const ok = await this.loadRealWeather(true);
+    if (!ok) throw new Error('open-meteo no disponible');
   }
 
   private applyWind(): void {
@@ -219,8 +237,13 @@ export class WeatherPanel {
 
   private applyAtmo(): void {
     if (this.realActive) {
+      // Salir del modo real por T/P también debe soltar SU perfil de viento:
+      // si quedara instalado, los sliders de viento serían no-op silenciosos
+      // (la UI enseñaría "25 m/s" mientras el solver usa el perfil real).
       this.realActive = false;
+      this.profileActive = false;
       this.realBtn.classList.remove('toggled');
+      this.service.setSteadyWind(this.windSpeed, this.windBearing);
       this.modeLabel.textContent = 'Manual (meteo real desactivada).';
     }
     this.service.setSeaLevelConditions(this.tempC + 273.15, this.pressureHPa * 100);

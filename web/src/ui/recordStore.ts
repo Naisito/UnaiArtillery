@@ -10,7 +10,12 @@
 export function loadRecords<T>(storeKey: string): Record<string, T> {
   try {
     const raw = localStorage.getItem(storeKey);
-    return raw ? (JSON.parse(raw) as Record<string, T>) : {};
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    // "null", "3" o "[1]" son JSON válidos pero NO son un mapa de récords:
+    // indexarlos rompería el arranque (violando la garantía del módulo).
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed as Record<string, T>;
   } catch {
     return {};
   }

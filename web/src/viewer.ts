@@ -22,13 +22,25 @@ export async function createViewer(containerId: string): Promise<Cesium.Viewer> 
   const hasToken = token.length > 0;
   if (hasToken) Cesium.Ion.defaultAccessToken = token;
 
+  // El provider de CWT se espera AQUÍ: `Cesium.Terrain.fromWorldTerrain()`
+  // lo instala async y la batería se anclaba a h=0 (elipsoide) antes de que
+  // llegara — el cañón y todo lo ENU quedaban ~1 km bajo el relieve visual.
+  let worldTerrain: Cesium.CesiumTerrainProvider | null = null;
+  if (hasToken) {
+    try {
+      worldTerrain = await Cesium.createWorldTerrainAsync({ requestWaterMask: true });
+    } catch (err) {
+      console.warn('[UnaiArtillery] Cesium World Terrain no disponible — sigo sin relieve', err);
+    }
+  }
+
   const viewer = new Cesium.Viewer(containerId, {
     // Sin token, el Viewer por defecto pediría imaginería ion y fallaría:
     // damos una capa base explícita de OSM en ese caso.
     // P-VIVO.4 — waterMask: el mar SE VE como agua (especular animado) y de
     // paso delata visualmente dónde el splash sustituye al cráter.
-    ...(hasToken
-      ? { terrain: Cesium.Terrain.fromWorldTerrain({ requestWaterMask: true }) }
+    ...(worldTerrain
+      ? { terrainProvider: worldTerrain }
       : {
           baseLayer: new Cesium.ImageryLayer(
             new Cesium.OpenStreetMapImageryProvider({ url: 'https://tile.openstreetmap.org/' }),
@@ -68,6 +80,8 @@ export class GoogleTiles {
   private tileset: Cesium.Cesium3DTileset | null = null;
   private loading: Promise<Cesium.Cesium3DTileset | null> | null = null;
   private failWarned = false;
+  /** Secuencia de setEnabled: la ÚLTIMA llamada decide el estado final. */
+  private reqSeq = 0;
 
   constructor(
     private readonly viewer: Cesium.Viewer,
@@ -104,6 +118,7 @@ export class GoogleTiles {
    */
   async setEnabled(on: boolean): Promise<boolean> {
     const scene = this.viewer.scene;
+    const seq = ++this.reqSeq;
     if (!on) {
       if (this.tileset) this.tileset.show = false;
       scene.globe.show = true;
@@ -115,6 +130,12 @@ export class GoogleTiles {
       this.tileset = await this.loading;
       this.loading = null;
       if (!this.tileset) return false;
+    }
+    // Carrera ON→OFF: si el usuario apagó el toggle mientras el tileset
+    // cargaba, el OFF (más nuevo) manda — no re-enciendas por encima.
+    if (seq !== this.reqSeq) {
+      this.tileset.show = false;
+      return false;
     }
     this.tileset.show = true;
     // Aparta el globo base: las teselas fotorrealistas YA traen su terreno y

@@ -73,6 +73,12 @@ export class BallisticsService {
     { resolve: (v: unknown) => void; reject: (e: unknown) => void }
   >();
   private readonly laneLatest = new Map<string, number>();
+  /** Ordena las peticiones de un carril por instante de PETICIÓN (no de post):
+   *  un preview viejo que muestreó terreno lento no puede pisar a uno nuevo. */
+  private readonly laneTickets = new Map<string, number>();
+  /** Época de cachés: setBattery/meteo la avanzan; respuestas de la época
+   *  anterior no repueblan las cachés recién invalidadas. */
+  private cacheEpoch = 0;
 
   constructor(private readonly viewer: Cesium.Viewer) {
     // Anclaje por defecto: Sierra de Guadarrama (paisaje con relieve).
@@ -82,11 +88,26 @@ export class BallisticsService {
         type: 'module',
       });
       this.worker.onmessage = (ev: MessageEvent<WorkerResponse>) => this.onWorkerMessage(ev.data);
-      this.worker.onerror = (ev) => console.error('[ballistics.worker]', ev.message ?? ev);
+      // Si el worker muere (chunk 404, error top-level), las promesas
+      // pendientes NO pueden quedar colgadas: se rechazan todas y el servicio
+      // degrada a ejecución en línea (mismo executeRequest) para siempre.
+      this.worker.onerror = (ev) => this.failWorker(ev.message ?? 'worker error');
+      this.worker.onmessageerror = () => this.failWorker('worker message deserialization error');
     } catch {
       console.warn('[BallisticsService] Sin Web Worker: los solves corren en el hilo principal.');
       this.worker = null;
     }
+  }
+
+  /** El worker no es fiable: rechaza lo pendiente y degrada a inline. */
+  private failWorker(reason: unknown): void {
+    if (!this.worker) return;
+    console.error('[ballistics.worker] caído — degradando a ejecución en línea:', reason);
+    try { this.worker.terminate(); } catch { /* ya muerto */ }
+    this.worker = null;
+    const err = new Error(`ballistics worker caído (${String(reason)})`);
+    for (const [, p] of this.pending) p.reject(err);
+    this.pending.clear();
   }
 
   /** Posición ENU de la boca del arma. */
@@ -144,9 +165,15 @@ export class BallisticsService {
     let h = await this.tilesetHeight(carto);
     if (h === null) h = await this.sampleHeight(carto);
     this.frame = new GeoFrame(lonDeg, latDeg, h);
+    this.invalidateRangeCaches();
+    this.waterCache.clear(); // P-VIVO.4 — las celdas eran ENU de la posición vieja
+  }
+
+  /** Los anillos/tablas dependen de posición Y meteo: invalidar juntos. */
+  private invalidateRangeCaches(): void {
+    this.cacheEpoch++;
     this.ringCache.clear();
     this.ringInFlight.clear();
-    this.waterCache.clear(); // P-VIVO.4 — las celdas eran ENU de la posición vieja
   }
 
   /** Arma con la munición seleccionada ya aplicada (P-PRO.4). */
@@ -163,16 +190,19 @@ export class BallisticsService {
     // hacía la capa Unreal. El spec serializable mantiene al worker en sync.
     this.windSpec = { kind: 'steady', speedMS, fromBearingDeg, ekman: true };
     this.atmo.windField = windFieldOf(this.windSpec);
+    this.invalidateRangeCaches(); // el alcance máximo depende del viento
   }
 
   setWindProfile(points: WindProfilePoint[]): void {
     this.windSpec = { kind: 'profile', points };
     this.atmo.windField = windFieldOf(this.windSpec);
+    this.invalidateRangeCaches();
   }
 
   setSeaLevelConditions(temperatureK: number, pressurePa: number): void {
     this.atmo.seaLevelTemperatureK = temperatureK;
     this.atmo.seaLevelPressurePa = pressurePa;
+    this.invalidateRangeCaches(); // T/P cambian la densidad y el alcance
   }
 
   /** Velocidad del sonido a una altitud ENU (para el retardo del boom). */
@@ -197,11 +227,27 @@ export class BallisticsService {
       anchorLonDeg: this.frame.lonDeg,
       enableCoriolis: true,
       groundZ: 0.0, // el marco está anclado en el suelo de la batería
+      // La atmósfera se define sobre el nivel del mar: el solver muestrea
+      // densidad/Mach en z ENU + cota real de la batería (una batería a
+      // 1500 m dispara con SU aire, no con el del nivel del mar).
+      anchorAltitudeM: this.frame.heightM,
       ...overrides,
     };
   }
 
-  private call<T>(req: WorkerRequestBody, lane?: string): Promise<T> {
+  /** Reserva el turno de un carril ANTES de los awaits de terreno. */
+  private takeLaneTicket(lane: string): number {
+    const t = (this.laneTickets.get(lane) ?? 0) + 1;
+    this.laneTickets.set(lane, t);
+    return t;
+  }
+
+  private call<T>(req: WorkerRequestBody, lane?: string, ticket?: number): Promise<T> {
+    // Si mientras muestreábamos terreno entró una petición MÁS NUEVA del
+    // mismo carril, esta ya nació obsoleta: fuera sin tocar el worker.
+    if (lane && ticket !== undefined && ticket !== this.laneTickets.get(lane)) {
+      return Promise.reject(new SupersededError());
+    }
     const id = this.nextId++;
     if (lane) {
       const prev = this.laneLatest.get(lane);
@@ -437,13 +483,18 @@ export class BallisticsService {
     const dy = bEnu.y - aEnu.y;
     const len = Math.hypot(dx, dy);
     const n = Math.max(2, Math.min(96, Math.ceil(len / Math.max(30, stepM)) + 1));
-    const cartos: Cesium.Cartographic[] = [];
+    // La muestra 0 es la PROPIA batería: restar contra ella cancela el dátum
+    // de la fuente (DEM MSL vs terreno/teselas elipsoidales), igual que hace
+    // terrainZRelative — restar frame.heightM mezclaba dátums (~50 m de
+    // geoide) cuando el perfil se usa como altura absoluta (blancos móviles).
+    const cartos: Cesium.Cartographic[] = [this.frame.cartographicOfEnu(new Vec3(0, 0, 0))];
     for (let i = 0; i < n; i++) {
       const f = i / (n - 1);
       cartos.push(this.frame.cartographicOfEnu(new Vec3(aEnu.x + dx * f, aEnu.y + dy * f, 0)));
     }
     const heights = await this.sampleHeights(cartos);
-    return heights.map((h) => h - this.frame.heightM);
+    const ref = heights[0];
+    return heights.slice(1).map((h) => h - ref);
   }
 
   // -- Tiro y dirección de fuego ---------------------------------------------
@@ -455,6 +506,7 @@ export class BallisticsService {
     const inFlight = this.ringInFlight.get(key);
     if (inFlight) return inFlight;
 
+    const epoch = this.cacheEpoch;
     const p = this.call<RangeRing>({
       op: 'approxMaxRange',
       weaponId: id,
@@ -464,9 +516,13 @@ export class BallisticsService {
       atmo: this.atmoSpec(),
       cfg: this.makeConfigSpec({ dt: 0.02, maxFlight: 700 }),
     }).then((ring) => {
-      this.ringCache.set(key, ring);
-      this.ringInFlight.delete(key);
+      // Solo cachea si la batería/meteo no cambiaron mientras se calculaba.
+      if (epoch === this.cacheEpoch) this.ringCache.set(key, ring);
       return ring;
+    }).finally(() => {
+      // También en caso de ERROR: una promesa rechazada cacheada aquí
+      // envenenaría todos los tiros de este arma+carga para siempre.
+      if (this.ringInFlight.get(key) === p) this.ringInFlight.delete(key);
     });
     this.ringInFlight.set(key, p);
     return p;
@@ -488,6 +544,10 @@ export class BallisticsService {
     lane?: string,
     presampledTerrain?: TerrainSpec,
   ): Promise<FlightResult> {
+    // El turno del carril se reserva ANTES de muestrear terreno: si otro
+    // preview más nuevo arranca durante los awaits, este muere superseded
+    // (y no al revés, que era la carrera).
+    const ticket = lane ? this.takeLaneTicket(lane) : undefined;
     const ring = await this.approxMaxRange(id, order.chargeIndex);
     // Objetivo guiado desplazado del eje: ensancha la banda hasta cubrirlo.
     let halfWidthM = 1000;
@@ -517,6 +577,7 @@ export class BallisticsService {
         terrain,
       },
       lane,
+      ticket,
     );
     return hydrateFlightResult(raw);
   }
@@ -601,6 +662,7 @@ export class BallisticsService {
     order: FireOrder,
     errors: DispersionErrors,
   ): Promise<DispersionPrediction> {
+    const ticket = this.takeLaneTicket('predict-dispersion');
     const ring = await this.approxMaxRange(id, order.chargeIndex);
     const terrain = await this.sampleCorridor(order.azimuthDeg, ring.maxRangeM, 400, 2000);
     return this.call<DispersionPrediction>(
@@ -618,6 +680,7 @@ export class BallisticsService {
         terrain,
       },
       'predict-dispersion',
+      ticket,
     );
   }
 
@@ -684,6 +747,7 @@ export class BallisticsService {
     });
     const hit = this.tableCache.get(key);
     if (hit) return hit;
+    const ticket = this.takeLaneTicket('firing-table');
     const table = await this.call<FiringTable>(
       {
         op: 'generateFiringTable',
@@ -696,6 +760,7 @@ export class BallisticsService {
         cfg: this.makeConfigSpec({ dt: 0.01 }), // ±0.1%: de sobra para la lección
       },
       'firing-table',
+      ticket,
     );
     if (this.tableCache.size >= 8) {
       this.tableCache.delete(this.tableCache.keys().next().value!); // FIFO

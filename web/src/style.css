@@ -52,7 +52,15 @@ canvas.three-overlay {
   overflow-y: auto;
 }
 
-#controlPanel { top: 16px; left: 16px; width: 300px; }
+#controlPanel {
+  top: 16px;
+  left: 16px;
+  width: 300px;
+  /* Nunca invade la esquina del cockpit (abajo-izquierda): si el contenido
+     no cabe, la consola scrollea por dentro en vez de quedar por debajo de
+     otro panel que intercepta los clics. */
+  max-height: calc(100vh - 260px);
+}
 #weatherPanel { top: 16px; right: 16px; width: 260px; }
 
 /* --- Cockpit de puntería (P-NEXT.1) -------------------------------------- */
@@ -77,6 +85,7 @@ canvas.three-overlay {
   transform: translateX(-50%);
   min-width: 620px;
   display: none; /* visible solo con proyectil en vuelo */
+  z-index: 11; /* la telemetría en vuelo gana a la tabla de tiro si se solapan */
 }
 #hud.active { display: block; }
 
@@ -87,6 +96,36 @@ canvas.three-overlay {
   text-transform: uppercase;
   color: var(--accent);
 }
+
+/* Secciones plegables de la consola (Cámara, Escena): agrupan lo secundario
+   sin esconderlo — la operación del arma queda siempre arriba. */
+.panel details.section {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.panel details.section > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 4px;
+  user-select: none;
+}
+.panel details.section > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--accent);
+  transition: transform 0.15s;
+}
+.panel details.section[open] > summary::before {
+  transform: rotate(90deg);
+}
+.panel details.section > summary::-webkit-details-marker { display: none; }
+.panel details.section > summary:hover { color: var(--text); }
 .panel h3 {
   margin: 10px 0 4px;
   font-size: 12px;
@@ -475,4 +514,15 @@ button.toggled { border-color: var(--accent2); color: var(--accent2); }
   #hud .grid { grid-template-columns: repeat(4, 1fr); }
   #firingTable { display: none; } /* no cabe: la lección vive en escritorio */
   #tutorialHelpBtn { right: 8px; top: 8px; } /* la meteo vive plegada en pestañas */
+  /* Reto FO jugable en móvil: sin min-width fijo (desbordaba 460px en un
+     viewport de 360 y los botones ±100 quedaban fuera de pantalla). */
+  #foPanel {
+    min-width: 0;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    transform: none;
+    bottom: 56px; /* deja respirar a la barra de pestañas */
+  }
+  #foPanel .fo-row { flex-wrap: wrap; }
 }

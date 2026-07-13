@@ -351,7 +351,10 @@ export class ArtilleryPiece {
         azimuth = (Math.atan2(this.targetEnu.x, this.targetEnu.y) * 180) / Math.PI;
         rangeM = Math.hypot(this.targetEnu.x, this.targetEnu.y);
       } else {
-        const probe = await this.service.solveTrajectory(this.panel.weaponId, this.order(), undefined, { dt: 0.01 });
+        // La sonda vuela SIN espoleta (como el preview): con ILLUM, el corte
+        // de tiempo daría el alcance del burst aéreo, no el del impacto.
+        const { fuze: _fuze, ...bareOrder } = this.order();
+        const probe = await this.service.solveTrajectory(this.panel.weaponId, bareOrder, undefined, { dt: 0.01 });
         rangeM = probe.downrange;
       }
 
@@ -459,6 +462,7 @@ export class ArtilleryPiece {
     const live = this.presenters.filter((q) => !q.isImpacted);
     if (live.length >= MAX_LIVE_PROJECTILES) {
       const oldest = live[0];
+      this.director.untrack(oldest); // que la cámara no persiga un fantasma
       oldest.dispose();
       const i = this.presenters.indexOf(oldest);
       if (i >= 0) this.presenters.splice(i, 1);
@@ -555,5 +559,21 @@ export class ArtilleryPiece {
     this.targetEnu = null;
     this.preview.showTarget(null);
     this.preview.showErrorEllipse(null); // P-PRO.6
+  }
+
+  /**
+   * Mover la batería re-ancla el marco ENU: los vuelos en curso y la caché
+   * de repetición son coordenadas del marco VIEJO — si sobreviven, aparecen
+   * teletransportados alrededor del ancla nueva. Se desmontan todos.
+   */
+  disposeAllFlights(): void {
+    this.burst = null;
+    for (const p of this.presenters) {
+      this.director.untrack(p);
+      p.dispose();
+    }
+    this.presenters = [];
+    this.lastFlightCache = null;
+    this.hud.hide();
   }
 }

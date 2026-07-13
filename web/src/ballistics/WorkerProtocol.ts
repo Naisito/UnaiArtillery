@@ -157,6 +157,7 @@ export type SolverConfigSpec = Partial<
     SolverConfig,
     | 'dt' | 'maxFlight' | 'groundZ' | 'enableCoriolis' | 'latitudeDeg'
     | 'sampleEvery' | 'enableDrag' | 'sphericalEarth' | 'anchorLonDeg'
+    | 'anchorAltitudeM'
   >
 >;
 
@@ -342,6 +343,7 @@ export function executeRequest(req: WorkerRequest): unknown {
         stepM: req.stepM,
         dt: req.cfg.dt,
         latitudeDeg: req.cfg.latitudeDeg,
+        anchorAltitudeM: req.cfg.anchorAltitudeM,
         atmosphere: atmo,
         v0Scale: v0Factor(req.v0Correction),
       });

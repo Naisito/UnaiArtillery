@@ -234,6 +234,13 @@ export class CameraDirector {
     this.setMode('follow');
   }
 
+  /** El presentador va a destruirse (evicción FIFO / mover batería): si la
+   *  cámara lo seguía, suéltalo — perseguir un fantasma congela la vista y
+   *  retiene su FlightResult entero en memoria. */
+  untrack(p: ProjectilePresenter): void {
+    if (this.tracked === p) this.tracked = null;
+  }
+
   /** Sacudida de impacto: amp ya llega saturada (0..12). */
   shake(amp: number): void {
     this.shakeAmp = Math.max(this.shakeAmp, amp);
@@ -406,7 +413,23 @@ export class CameraDirector {
     });
   }
 
+  /** Offset de sacudida aplicado el frame anterior (ejes de cámara). */
+  private appliedShake: { x: number; y: number; z: number } | null = null;
+
   private tickShake(dt: number): void {
+    const cam = this.viewer.camera;
+    // Deshacer la muestra del frame anterior ANTES de aplicar la nueva: en
+    // modo libre nadie reescribe la posición y las muestras se ACUMULABAN
+    // (la cámara acababa desplazada metros tras cada impacto cercano). En
+    // los demás modos applyView ya machacó la posición: no hay nada que
+    // deshacer.
+    if (this.appliedShake && this.mode === 'free') {
+      cam.move(cam.right, -this.appliedShake.x);
+      cam.move(cam.up, -this.appliedShake.y);
+      cam.move(cam.direction, -this.appliedShake.z);
+    }
+    this.appliedShake = null;
+
     if (this.shakeAmp < 0.02) return;
     this.shakeAge += dt;
     // Oscilación pseudo-perlin (senos inconmensurables) amortiguada ~0.7 s.
@@ -423,8 +446,9 @@ export class CameraDirector {
     // Hasta ~1.5 m de desplazamiento con amp=12: contundente sin marear.
     const offset = new Cesium.Cartesian3(nx, ny, nz);
     Cesium.Cartesian3.multiplyByScalar(offset, a * 0.12, offset);
-    this.viewer.camera.move(this.viewer.camera.right, offset.x);
-    this.viewer.camera.move(this.viewer.camera.up, offset.y);
-    this.viewer.camera.move(this.viewer.camera.direction, offset.z * 0.4);
+    cam.move(cam.right, offset.x);
+    cam.move(cam.up, offset.y);
+    cam.move(cam.direction, offset.z * 0.4);
+    this.appliedShake = { x: offset.x, y: offset.y, z: offset.z * 0.4 };
   }
 }

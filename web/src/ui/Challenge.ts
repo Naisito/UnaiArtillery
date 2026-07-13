@@ -59,7 +59,10 @@ export class Challenge {
     private readonly panel: ControlPanel,
     private readonly hooks: ChallengeHooks,
   ) {
-    const host = document.getElementById('controlPanel')!;
+    // Se monta en el anfitrión de Instrucción (junto a la operación del
+    // arma); si no existiera, cae al panel entero como antes.
+    const host =
+      document.getElementById('instructionHost') ?? document.getElementById('controlPanel')!;
     const h3 = document.createElement('h3');
     h3.textContent = 'Instrucción';
     host.appendChild(h3);
@@ -139,21 +142,32 @@ export class Challenge {
     this.movingBtn.disabled = true;
     this.hooks.onStart?.(); // P-VIVO.6 — cancela el reto FO si estaba vivo
     this.hooks.clearMoving?.(); // reto anterior fuera
+    const weaponAtStart = this.panel.weaponId;
+    const chargeAtStart = this.panel.chargeIndex;
     try {
-      const id = this.panel.weaponId;
-      const ring = await this.service.approxMaxRange(id, this.panel.chargeIndex);
+      const id = weaponAtStart;
+      const ring = await this.service.approxMaxRange(id, chargeAtStart);
       // La semilla del reloj SOLO aquí — la lógica del anillo es pura.
-      // El reto móvil usa el anillo [0.3, 0.95] (el camión pasea dentro).
+      // El reto móvil pasea el camión en [max(0.3·máx, mín), 0.95·máx]:
+      // respetar el alcance MÍNIMO evita zonas muertas inalcanzables
+      // (mortero a carga corta).
+      const movingLo = Math.max(0.3 * ring.maxRangeM, ring.minRangeM);
+      const movingHi = 0.95 * ring.maxRangeM;
       const spec = moving
         ? {
             azimuthDeg: 360 * Math.random(),
-            rangeM: (0.3 + 0.65 * Math.random()) * ring.maxRangeM,
+            rangeM: movingLo + (movingHi - movingLo) * Math.random(),
           }
         : pickTargetInRing(Math.random, ring.maxRangeM, ring.minRangeM);
 
       // Altura REAL del suelo bajo la diana: perfil 1D del corredor.
       const corridor = await this.service.sampleCorridor(spec.azimuthDeg, spec.rangeM * 1.05, 400, 0);
       const ground = buildTerrain(corridor);
+      // Si el usuario cambió de arma/carga durante el planteo (awaits de
+      // terreno), este reto es del arma ANTERIOR: abortar en silencio.
+      if (this.panel.weaponId !== weaponAtStart || this.panel.chargeIndex !== chargeAtStart) {
+        return;
+      }
       const az = (spec.azimuthDeg * Math.PI) / 180;
       const e = Math.sin(az) * spec.rangeM;
       const n = Math.cos(az) * spec.rangeM;
@@ -170,8 +184,8 @@ export class Challenge {
         const speedMS = (20 + Math.random() * 40) / 3.6;
         const headingDeg = 360 * Math.random();
         this.hooks.spawnMoving?.(this.target, headingDeg, speedMS, {
-          minM: 0.3 * ring.maxRangeM,
-          maxM: 0.95 * ring.maxRangeM,
+          minM: movingLo,
+          maxM: movingHi,
         });
         this.startBtn.textContent = '🏅 Reto';
         this.movingBtn.textContent = '🚚 Otro móvil';
