@@ -146,31 +146,51 @@ export class GoogleTiles {
 
   private async load(): Promise<Cesium.Cesium3DTileset | null> {
     const key = GoogleTiles.googleKey();
-    try {
-      let tileset: Cesium.Cesium3DTileset;
-      if (key) {
-        Cesium.GoogleMaps.defaultApiKey = key;
-        tileset = await Cesium.createGooglePhotorealistic3DTileset();
-      } else if (GoogleTiles.ionToken()) {
-        // Mismo tileset, servido a través de Cesium ion (asset 2275207).
-        tileset = await Cesium.Cesium3DTileset.fromIonAssetId(2275207);
-      } else {
-        this.onWarning('Edificios 3D: falta VITE_GOOGLE_MAPS_KEY (o token de ion).');
-        return null;
-      }
-      tileset.tileFailed.addEventListener(() => {
-        if (this.failWarned) return;
-        this.failWarned = true;
-        this.onWarning('Edificios 3D: fallos cargando teselas (¿cuota agotada?).');
-      });
-      this.viewer.scene.primitives.add(tileset);
-      return tileset;
-    } catch (err) {
-      this.onWarning(
-        'Edificios 3D no disponibles (clave inválida o cuota agotada) — sigo sin ellos.',
-      );
-      console.warn('[GoogleTiles]', err);
+    const ion = GoogleTiles.ionToken();
+    if (!key && !ion) {
+      this.onWarning('Edificios 3D: falta VITE_GOOGLE_MAPS_KEY (o token de ion).');
       return null;
     }
+
+    // 1) Clave directa de Google. OJO: desde 2025-07-08 la Map Tiles API
+    // devuelve 403 a las cuentas con facturación en el EEA (3D/satélite
+    // prohibidos, sin excepciones) — por eso el fallo aquí NO es terminal:
+    // se reintenta por Cesium ion, cuya cuenta no está sujeta al bloqueo.
+    if (key) {
+      try {
+        Cesium.GoogleMaps.defaultApiKey = key;
+        return this.adopt(await Cesium.createGooglePhotorealistic3DTileset());
+      } catch (err) {
+        console.warn('[GoogleTiles] clave directa rechazada', err);
+        if (ion) {
+          this.onWarning('Google rechazó la clave (¿cuenta EEA o cuota?) — probando vía Cesium ion…');
+        }
+      }
+    }
+
+    // 2) Mismo tileset, servido a través de Cesium ion (asset 2275207).
+    if (ion) {
+      try {
+        return this.adopt(await Cesium.Cesium3DTileset.fromIonAssetId(2275207));
+      } catch (err) {
+        console.warn('[GoogleTiles] vía ion fallida', err);
+      }
+    }
+
+    this.onWarning(
+      'Edificios 3D no disponibles (clave inválida, bloqueo EEA o cuota agotada) — sigo sin ellos.',
+    );
+    return null;
+  }
+
+  /** Cablea el aviso de teselas fallidas y cuelga el tileset de la escena. */
+  private adopt(tileset: Cesium.Cesium3DTileset): Cesium.Cesium3DTileset {
+    tileset.tileFailed.addEventListener(() => {
+      if (this.failWarned) return;
+      this.failWarned = true;
+      this.onWarning('Edificios 3D: fallos cargando teselas (¿cuota agotada?).');
+    });
+    this.viewer.scene.primitives.add(tileset);
+    return tileset;
   }
 }
