@@ -1,5 +1,10 @@
 # Backlog de mejoras — prompts listos para Fable (3ª ola: COMPLETADA)
 
+> **La 4ª ola (pendiente) vive en [`MEJORAS_4A_OLA.md`](MEJORAS_4A_OLA.md):**
+> el mundo responde — espoletas, audio posicional, ráfagas con trazadoras,
+> agua/edificios, noche+bengalas, observador avanzado, blancos móviles,
+> V0 efectiva, compartir por URL y tutorial/táctil.
+
 Las tres olas están completadas: la 1ª (2026-07-05) hizo el pivote web
 (CesiumJS + Three.js, núcleo C++ portado a TS validado) y la fidelidad P1; la 2ª
 (2026-07-06, P-NEXT.1–7) añadió atmósfera ISA-76 hasta 86 km, solves en Web

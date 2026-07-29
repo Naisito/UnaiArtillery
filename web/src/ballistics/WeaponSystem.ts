@@ -19,14 +19,66 @@ import { Weapon } from './WeaponCatalog';
 import { Vec3 } from './Vec3';
 import { DeterministicRng } from './random';
 
+// ---- P-VIVO.3 ---------------------------------------------------------------
+/**
+ * Espoleta del orden de tiro. Solo cambia la CONDICIÓN DE CORTE del solver:
+ *   'impact'    — detonación al tocar el suelo (default; paridad C++ intacta).
+ *   'time'      — la integración termina en t = timeS (airburst, esté donde esté).
+ *   'proximity' — termina al bajar de heightM sobre el suelo en fase descendente.
+ *   'delay'     — mismo punto de impacto; el resultado se marca 'buried'.
+ */
+export type FuzeMode = 'impact' | 'time' | 'proximity' | 'delay';
+
+export interface FuzeSpec {
+  mode: FuzeMode;
+  /** 'time': instante de detonación (s desde el disparo). */
+  timeS?: number;
+  /** 'proximity': altura de disparo sobre el suelo (m). Default 7. */
+  heightM?: number;
+}
+
 export interface FireOrder {
   azimuthDeg: number;   // compass bearing to aim (0 = North, 90 = East)
   elevationDeg: number; // quadrant elevation
   chargeIndex: number;  // index into Weapon.charges (-1 => round default)
+  /** P-VIVO.3 — espoleta; ausente o 'impact' = comportamiento clásico. */
+  fuze?: FuzeSpec;
+  /** P-VIVO.9 — corrección de V0 (temperatura de carga, desgaste, sesgo). */
+  v0Correction?: V0Correction;
 }
 
 export function defaultFireOrder(): FireOrder {
   return { azimuthDeg: 0.0, elevationDeg: 45.0, chargeIndex: -1 };
+}
+
+// ---- P-VIVO.9 ---------------------------------------------------------------
+/**
+ * La V0 real no es el número del catálogo: varía con la temperatura del
+ * propelente (~0.06%/°C en cargas de 155 mm) y el desgaste del tubo, y la
+ * dirección de tiro la corrige con radar de boca (biasFraction). Con el
+ * default neutro el factor es exactamente 1.0 y la paridad queda intacta.
+ *
+ *   V0_efectiva = V0 · (1 + 0.0006·(chargeTempC − 21)) · (1 − wearFraction) · (1 + biasFraction)
+ */
+export interface V0Correction {
+  /** Temperatura del propelente (°C). 21 °C = condición estándar de tablas. */
+  chargeTempC: number;
+  /** Fracción de V0 perdida por desgaste del tubo (0 = tubo nuevo). */
+  wearFraction: number;
+  /** Sesgo multiplicativo (radar de boca / lote); 0 = sin sesgo. */
+  biasFraction?: number;
+}
+
+/** Sensibilidad térmica del propelente: ~0.06 %/°C (tablas 155 mm, orden de magnitud). */
+export const V0_TEMP_COEFF_PER_C = 0.0006;
+
+export function v0Factor(c?: V0Correction): number {
+  if (!c) return 1.0;
+  return (
+    (1.0 + V0_TEMP_COEFF_PER_C * (c.chargeTempC - 21.0)) *
+    (1.0 - c.wearFraction) *
+    (1.0 + (c.biasFraction ?? 0.0))
+  );
 }
 
 export interface SolveResult {
@@ -39,8 +91,14 @@ export interface SolveResult {
 
 // ---- P1.6 -------------------------------------------------------------------
 export interface DispersionErrors {
-  /** Std deviation of muzzle velocity (m/s). Lot-to-lot + round-to-round. */
+  /** Std deviation of muzzle velocity (m/s). Round-to-round. */
   muzzleVelocityStd?: number;
+  /**
+   * P-VIVO.9 — sesgo SISTEMÁTICO de V0 (m/s) compartido por toda la salva
+   * (lote que sale caliente/frío, desgaste no declarado). Es lo que un radar
+   * de boca mide y una corrección de dirección de tiro cancela.
+   */
+  muzzleVelocityBias?: number;
   /** Std deviation of the azimuth lay (NATO mils, 6400/circle). */
   azimuthStdMils?: number;
   /** Std deviation of the elevation lay (NATO mils). */
@@ -87,12 +145,16 @@ export class WeaponSystem {
     this.solver = new BallisticsSolver(atmo, cfg);
   }
 
-  /** Effective muzzle velocity for a fire order (charge zone or default). */
+  /** Effective muzzle velocity for a fire order (charge zone or default).
+   *  P-VIVO.9: aplica la corrección de V0 del orden (factor 1.0 exacto con el
+   *  default neutro: `v * 1.0` es bit a bit `v` en IEEE-754). */
   static muzzleVelocity(w: Weapon, order: FireOrder): number {
-    if (order.chargeIndex >= 0 && order.chargeIndex < w.charges.length) {
-      return w.charges[order.chargeIndex].muzzleVelocity;
-    }
-    return w.round.muzzleVelocity;
+    const base =
+      order.chargeIndex >= 0 && order.chargeIndex < w.charges.length
+        ? w.charges[order.chargeIndex].muzzleVelocity
+        : w.round.muzzleVelocity;
+    const f = v0Factor(order.v0Correction);
+    return f === 1.0 ? base : base * f;
   }
 
   /**
@@ -118,7 +180,7 @@ export class WeaponSystem {
     const v0 = WeaponSystem.muzzleVelocity(w, order);
     const el = WeaponSystem.clampElevation(w, order.elevationDeg);
     const v = WeaponSystem.launchVelocity(order.azimuthDeg, el, v0);
-    return this.solver.integrate(w.round, muzzlePos, v, targetEnu);
+    return this.solver.integrate(w.round, muzzlePos, v, targetEnu, order.fuze);
   }
 
   /** Ground range achieved for a given elevation (helper for the solver). */
@@ -138,11 +200,12 @@ export class WeaponSystem {
     azimuthDeg: number,
     chargeIndex: number,
     preferHighAngle: boolean,
+    v0Correction?: V0Correction,
   ): SolveResult {
     const none: SolveResult = {
       found: false, elevationDeg: 0, timeOfFlight: 0, impactSpeed: 0, usedHighAngle: false,
     };
-    const probe: FireOrder = { azimuthDeg: 0, elevationDeg: 45, chargeIndex };
+    const probe: FireOrder = { azimuthDeg: 0, elevationDeg: 45, chargeIndex, v0Correction };
     const v0 = WeaponSystem.muzzleVelocity(w, probe);
 
     // Sweep elevation to find the range curve and locate the maximum.
@@ -179,7 +242,7 @@ export class WeaponSystem {
     const sol = preferHighAngle ? bisect(hi, bestEl) : bisect(lo, bestEl);
     if (sol === null) return none;
 
-    const ord: FireOrder = { azimuthDeg, elevationDeg: sol, chargeIndex };
+    const ord: FireOrder = { azimuthDeg, elevationDeg: sol, chargeIndex, v0Correction };
     const fr = this.fire(w, muzzlePos, ord);
     return {
       found: true,
@@ -219,7 +282,10 @@ export class WeaponSystem {
     const flights: FlightResult[] = [];
 
     for (let i = 0; i < n; i++) {
-      const v0 = v0Nominal + rng.gaussian(0, errors.muzzleVelocityStd ?? 0);
+      const v0 =
+        v0Nominal +
+        (errors.muzzleVelocityBias ?? 0) + // P-VIVO.9 — sesgo de lote sistemático
+        rng.gaussian(0, errors.muzzleVelocityStd ?? 0);
       const az = order.azimuthDeg + rng.gaussian(0, (errors.azimuthStdMils ?? 0) * MILS_TO_DEG);
       const el = WeaponSystem.clampElevation(
         w,
@@ -235,7 +301,7 @@ export class WeaponSystem {
       atmo.windField = (pos, t) => baseWind(pos, t).add(gust);
       const solver = new BallisticsSolver(atmo, this.cfg);
       const v = WeaponSystem.launchVelocity(az, el, v0);
-      const fr = solver.integrate(w.round, muzzlePos, v);
+      const fr = solver.integrate(w.round, muzzlePos, v, undefined, order.fuze);
       impacts.push(fr.impactPoint);
       if (collectFlights) flights.push(fr);
     }
@@ -343,6 +409,7 @@ export class WeaponSystem {
     azimuthDeg: number,
     nRounds: number,
     chargeIndices?: number[],
+    v0Correction?: V0Correction,
   ): MrsiRound[] {
     const charges =
       chargeIndices ??
@@ -352,7 +419,7 @@ export class WeaponSystem {
     const candidates: Candidate[] = [];
     for (const ci of charges) {
       for (const high of [true, false]) {
-        const sr = this.solveForRange(w, muzzlePos, targetRange, azimuthDeg, ci, high);
+        const sr = this.solveForRange(w, muzzlePos, targetRange, azimuthDeg, ci, high, v0Correction);
         if (sr.found) {
           candidates.push({ chargeIndex: ci, el: sr.elevationDeg, tof: sr.timeOfFlight, high });
         }
