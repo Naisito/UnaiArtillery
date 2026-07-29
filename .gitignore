@@ -13,6 +13,9 @@ Intermediate/
 Saved/
 *.sln
 
+# Fotos y videos exportados del banco de pruebas (tools/capture.mjs)
+capturas/
+
 # SO
 Thumbs.db
 .DS_Store

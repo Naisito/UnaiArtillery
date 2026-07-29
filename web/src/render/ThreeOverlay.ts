@@ -14,6 +14,7 @@
 import * as Cesium from 'cesium';
 import * as THREE from 'three';
 import { GeoFrame } from '../frame';
+import { proceduralEnvironment } from './PostFX';
 
 export class ThreeOverlay {
   readonly renderer: THREE.WebGLRenderer;
@@ -47,6 +48,10 @@ export class ThreeOverlay {
     this.camera.matrixAutoUpdate = true;
     this.scene.add(this.enuRoot);
     this.setFrame(frame);
+
+    // P-VFX.2 — entorno para los metales: sin él, metalness alto se pinta negro.
+    this.scene.environment = proceduralEnvironment(this.renderer);
+    this.scene.environmentIntensity = 0.75;
 
     // Luz ambiente tenue + sol direccional aproximado (el shading fino lo dan
     // los materiales emisivos de los VFX).

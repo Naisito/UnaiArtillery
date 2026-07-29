@@ -177,7 +177,7 @@ export class ProjectileModel {
       this.exhaustLight.visible = s.thrusting;
       if (s.thrusting) {
         const flicker = 0.82 + 0.18 * Math.sin(s.elapsed * 63) * Math.cos(s.elapsed * 37);
-        this.exhaust.scale.setScalar(Math.max(3, this.lengthM * 1.6) * flicker);
+        this.exhaust.scale.setScalar(Math.max(2, this.lengthM * 0.8) * flicker);
         (this.exhaust.material as THREE.SpriteMaterial).opacity = 0.9 * flicker;
         this.exhaustLight.intensity = 550 * flicker;
       }
@@ -236,14 +236,19 @@ export class ProjectileModel {
   /**
    * Perfil de ojiva TANGENTE de radio ρ = (R² + L²)/(2R): el arco que empalma
    * sin quiebro con el cuerpo cilíndrico. Es la forma real de una granada.
+   *
+   * Con `y` medido desde la BASE de la ojiva (donde el radio vale R) hacia la
+   * punta (donde vale 0):   r(y) = √(ρ² − y²) + R − ρ
+   * Comprobación: r(0) = ρ + R − ρ = R; r(len) = (L²−R²)/2R + R − ρ = 0.
    */
-  private ogive(radius: number, len: number, y0: number, steps = 9): [number, number][] {
+  private ogive(
+    radius: number, len: number, y0: number, steps = 9, upTo = 1,
+  ): [number, number][] {
     const rho = (radius * radius + len * len) / (2 * radius);
     const pts: [number, number][] = [];
     for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const y = len * t;
-      const r = Math.sqrt(Math.max(0, rho * rho - (len - y) * (len - y))) + radius - rho;
+      const y = (len * upTo * i) / steps;
+      const r = Math.sqrt(Math.max(0, rho * rho - y * y)) + radius - rho;
       pts.push([Math.max(0, r), y0 + y]);
     }
     return pts;
@@ -283,14 +288,19 @@ export class ProjectileModel {
 
     // Culote + boat tail + cuerpo cilíndrico hasta el arranque de la ojiva.
     const bodyTop = L * 0.58;
+    const noseLen = L * 0.38;
     this.lathe([
       [0, 0], [R * 0.78, 0], [R, L * 0.13], [R, bodyTop],
     ], steel, 22);
-    // Ojiva tangente + espoleta, en el material que se calienta.
+    // Ojiva tangente truncada al 90% (ahí el radio ya es ~0.2R) y espoleta
+    // cilíndrica encima: es como termina una granada real, no en punta.
     this.lathe([
       [R, bodyTop],
-      ...this.ogive(R, L * 0.38, bodyTop),
-      [R * 0.2, L * 0.985], [R * 0.13, L * 1.02], [0, L * 1.03],
+      ...this.ogive(R, noseLen, bodyTop, 10, 0.9),
+      [R * 0.26, bodyTop + noseLen * 0.93],
+      [R * 0.26, L * 0.975],
+      [R * 0.15, L * 1.0],
+      [0, L * 1.005],
     ], noseMat, 22);
 
     // Banda de forzamiento: el aro de cobre que muerde el estriado.
@@ -314,8 +324,8 @@ export class ProjectileModel {
     this.lathe([
       [0, 0], [R * 0.28, 0], [R * 0.42, L * 0.1],
       [R * 0.9, L * 0.32], [R, L * 0.52], [R * 0.96, L * 0.66],
-      ...this.ogive(R * 0.96, L * 0.3, L * 0.66),
-      [R * 0.16, L * 0.99], [0, L * 1.02],
+      ...this.ogive(R * 0.96, L * 0.3, L * 0.66, 9, 0.9),
+      [R * 0.15, L * 0.94], [R * 0.15, L * 0.99], [0, L * 1.02],
     ], body, 20);
     // Vástago de cola (donde va la carga propulsora).
     this.lathe([
@@ -382,14 +392,16 @@ export class ProjectileModel {
     const R = d * 0.5;
     const bodyTop = L * 0.42;
 
+    const noseLen = L * 0.5;
     this.lathe([
       [0, 0], [R * 0.82, 0], [R, L * 0.14],   // boat tail
       [R, bodyTop],
-      ...this.ogive(R, L * 0.5, bodyTop),
+      ...this.ogive(R, noseLen, bodyTop, 10, 0.9),
     ], jacket, 18);
-    // Puntita gris (núcleo de acero asomando, como el M855).
+    // Puntita gris (núcleo de acero asomando, como el M855): arranca justo
+    // donde termina la ojiva truncada, con su mismo radio.
     this.lathe([
-      [R * 0.22, L * 0.92], [R * 0.12, L * 0.98], [0, L],
+      [R * 0.2, bodyTop + noseLen * 0.9], [R * 0.13, L * 0.96], [0, L],
     ], tip, 12);
   }
 }

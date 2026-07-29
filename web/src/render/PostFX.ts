@@ -74,6 +74,52 @@ export function getPuffTexture(): THREE.Texture {
   return puffTexture;
 }
 
+// ---------------------------------------------------------------------------
+//  Entorno para los metales.  [P-VFX.2]
+//
+//  Un MeshStandardMaterial con metalness alto y SIN environment map se pinta
+//  casi negro: un metal no tiene color difuso propio, solo refleja, y si no hay
+//  nada que reflejar no hay nada que ver. Los tubos y las cadenas salían como
+//  siluetas planas.
+//
+//  Aquí se genera un cielo equirectangular por canvas (cenit azul → horizonte
+//  cálido → suelo terroso), se pasa por PMREM para tener los niveles de
+//  rugosidad y se cuelga de scene.environment. Sigue siendo cero assets.
+// ---------------------------------------------------------------------------
+let envTexture: THREE.Texture | null = null;
+
+export function proceduralEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
+  if (envTexture) return envTexture;
+  const w = 256, h = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0.00, '#6f9fd8'); // cenit
+  g.addColorStop(0.38, '#b7cfea');
+  g.addColorStop(0.49, '#f3ead6'); // banda del horizonte, cálida
+  g.addColorStop(0.52, '#8d8a72'); // suelo, mucho más apagado
+  g.addColorStop(1.00, '#4a4738');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  // Un sol difuso hacia el noroeste alto: da un reflejo especular que "lee".
+  const sun = ctx.createRadialGradient(w * 0.68, h * 0.2, 0, w * 0.68, h * 0.2, h * 0.36);
+  sun.addColorStop(0, 'rgba(255,250,235,0.95)');
+  sun.addColorStop(1, 'rgba(255,250,235,0)');
+  ctx.fillStyle = sun;
+  ctx.fillRect(0, 0, w, h);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  envTexture = pmrem.fromEquirectangular(tex).texture;
+  tex.dispose();
+  pmrem.dispose();
+  return envTexture;
+}
+
 /** Activa UnrealBloomPass global si la URL lleva ?bloom=1. */
 export function maybeAttachBloom(overlay: ThreeOverlay): void {
   const params = new URLSearchParams(window.location.search);

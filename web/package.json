@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "e2e": "npm run build && playwright test",
     "firing-table": "tsx tools/firing_table.ts",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "capture": "npm run build && node tools/capture.mjs"
   },
   "dependencies": {
     "cesium": "^1.120.0",

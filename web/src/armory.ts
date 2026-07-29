@@ -15,10 +15,12 @@
 // ============================================================================
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { WeaponCatalog, WeaponId } from './ballistics';
+import { Vec3, WeaponCatalog, WeaponId } from './ballistics';
 import { GunModel } from './GunModel';
 import { ProjectileModel } from './render/ProjectileModel';
 import { AudioEngine } from './vfx/AudioEngine';
+import { VfxManager } from './vfx/effects';
+import { proceduralEnvironment } from './render/PostFX';
 
 const WEAPON_LABELS: Record<WeaponId, string> = {
   mortar120: '120 mm Mortero pesado',
@@ -58,8 +60,10 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 1.6);
 controls.enableDamping = true;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-const sun = new THREE.DirectionalLight(0xfff2dd, 2.6);
+scene.environment = proceduralEnvironment(renderer);
+scene.environmentIntensity = 0.7;
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.1);
 sun.position.set(6, -8, 12);
 scene.add(sun);
 const rim = new THREE.DirectionalLight(0xa9c2dd, 0.5);
@@ -82,6 +86,12 @@ const gunRoot = new THREE.Group();
 scene.add(gunRoot);
 const roundRoot = new THREE.Group();
 scene.add(roundRoot);
+
+// VFX con viento en calma: aquí se ve el fogonazo y la explosión DE CERCA,
+// que en el globo solo se aprecian en cámara de cabina.
+const vfxRoot = new THREE.Group();
+scene.add(vfxRoot);
+const vfx = new VfxManager(vfxRoot, () => new Vec3(0, 0, 0));
 
 const audio = new AudioEngine();
 let weaponId: WeaponId = 'm777';
@@ -123,16 +133,33 @@ gun.onMech = (event) => {
     energy: Math.cbrt(weapon.round.diameter / 0.155),
   });
 };
+gun.onBoreSmoke = (pos, dir) => vfx.boreSmoke(pos, dir, scaleOf());
+
+const scaleOf = () => Math.max(0.6, Math.cbrt(weapon.round.diameter / 0.155));
 
 function fire(): void {
   audio.unlock();
   gun.fireRecoil();
   roundElapsed = 0;
+  const scale = scaleOf();
+  vfx.launchSignature(gun.muzzleWorldEnu(), gun.muzzleDirEnu(), 1.225, scale, weapon.category);
   audio.boom(weapon.category === 'SmallArms' ? 'muzzleSmall' : 'muzzle', {
     distanceM: Math.max(6, camera.position.length()),
     soundSpeed: 340,
-    energy: Math.cbrt(weapon.round.diameter / 0.155),
+    energy: scale,
     caliberM: weapon.round.diameter,
+  });
+}
+
+/** Detonación de prueba delante del arma (para ver la explosión de cerca). */
+function detonate(distanceM = 40, yieldScale = 1.4): void {
+  audio.unlock();
+  const az = azCmd * Math.PI / 180;
+  const at = new Vec3(Math.sin(az) * distanceM, Math.cos(az) * distanceM, 0.5);
+  vfx.impactExplosion(at, yieldScale, 300);
+  audio.boom('impact', {
+    distanceM: Math.max(10, camera.position.distanceTo(new THREE.Vector3(at.x, at.y, at.z))),
+    soundSpeed: 340, energy: yieldScale, caliberM: weapon.round.diameter,
   });
 }
 
@@ -184,11 +211,9 @@ autoBtn.onclick = () => {
   if (autoFire) audio.unlock();
 };
 const impactBtn = document.createElement('button');
-impactBtn.textContent = 'Probar impacto';
-impactBtn.onclick = () => {
-  audio.unlock();
-  audio.boom('impact', { distanceM: 400, soundSpeed: 340, energy: 1.4, caliberM: 0.155 });
-};
+impactBtn.textContent = 'Detonar delante';
+impactBtn.title = 'Explosión completa a 40 m: bola de fuego, escombros, onda y humo';
+impactBtn.onclick = () => detonate();
 const farBtn = document.createElement('button');
 farBtn.textContent = 'Impacto a 6 km';
 farBtn.title = 'Se oye 18 s después, sin agudos y con la cola de eco del valle';
@@ -245,6 +270,72 @@ function info(): void {
     `campo ${weapon.traverseDeg}º · recarga ${weapon.reloadTime} s</p>`;
 }
 
+// ---------------------------------------------------------------------------
+//  API de guion — la usa tools/capture.mjs para grabar fotos y vídeos, y
+//  también sirve para trastear desde la consola del navegador.
+//  `?cine=1` en la URL oculta los paneles para grabar limpio.
+// ---------------------------------------------------------------------------
+let orbitSpeedDegS = 0;
+let orbitAngleDeg = 0;
+let orbitRadius = 12;
+let orbitHeight = 4.2;
+let orbitTargetZ = 1.6;
+
+function placeCamera(opts: {
+  azDeg?: number; dist?: number; height?: number; targetZ?: number;
+}): void {
+  if (opts.azDeg !== undefined) orbitAngleDeg = opts.azDeg;
+  if (opts.dist !== undefined) orbitRadius = opts.dist;
+  if (opts.height !== undefined) orbitHeight = opts.height;
+  if (opts.targetZ !== undefined) orbitTargetZ = opts.targetZ;
+  const a = orbitAngleDeg * Math.PI / 180;
+  camera.position.set(Math.sin(a) * orbitRadius, -Math.cos(a) * orbitRadius, orbitHeight);
+  controls.target.set(0, 0, orbitTargetZ);
+  controls.update();
+}
+
+const api = {
+  /** ¿Está todo montado? (el guion espera a esto antes de disparar). */
+  ready: () => true,
+  setWeapon: (id: WeaponId) => setWeapon(id),
+  /** Orden de puntería: los servos la persiguen a su velocidad. */
+  aim: (az: number, el: number) => { azCmd = az; elCmd = el; },
+  /** Puntería instantánea (sin viaje de servos). */
+  snapAim: (az: number, el: number) => {
+    azCmd = az; elCmd = el;
+    gun.update(0, az, el);
+  },
+  fire,
+  detonate,
+  autoFire: (on: boolean) => { autoFire = on; autoFireTimer = 0; },
+  camera: placeCamera,
+  orbit: (degPerS: number) => { orbitSpeedDegS = degPerS; },
+  /** Muestra u oculta el proyectil de muestra que flota junto al arma. */
+  showRound: (v: boolean) => { roundRoot.visible = v; },
+  /** Solo el proyectil: esconde el arma para los primeros planos. */
+  soloRound: (v: boolean) => {
+    gunRoot.visible = !v;
+    roundRoot.visible = v || roundRoot.visible;
+  },
+  /** Coloca y escala el proyectil de muestra (para los primeros planos). */
+  roundAt: (x: number, y: number, z: number, scale = 1) => {
+    round.group.position.set(x, y, z);
+    round.group.scale.setScalar(scale);
+  },
+  /** Reinicia el reloj del proyectil (aletas plegadas, precesión al máximo). */
+  restartRound: () => { roundElapsed = 0; },
+  ui: (v: boolean) => {
+    panel.style.display = v ? '' : 'none';
+    infoEl.style.display = v ? '' : 'none';
+  },
+};
+(window as unknown as { armory: typeof api }).armory = api;
+
+if (new URLSearchParams(window.location.search).get('cine') === '1') {
+  api.ui(false);
+  controls.enabled = false;
+}
+
 // -- Bucle -------------------------------------------------------------------
 let last = performance.now();
 function frame(): void {
@@ -272,6 +363,12 @@ function frame(): void {
     }
   }
 
+  if (orbitSpeedDegS !== 0) {
+    orbitAngleDeg += orbitSpeedDegS * dt;
+    placeCamera({});
+  }
+
+  vfx.update(dt, camera.position);
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
