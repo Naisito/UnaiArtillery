@@ -43,7 +43,35 @@ alrededor y usa la rueda para el zoom) / Dron / **Cabina** (en la boca del arma,
 gira con la rueda: pulsa Fuego y ve salir el tiro) / **1ª persona** (clic captura
 el ratón; WASD mueve, Espacio/C sube/baja, Shift esprinta, la rueda ajusta la
 velocidad de vuelo, Esc suelta el ratón). `?bloom=1` en la URL activa el
-UnrealBloomPass experimental.
+UnrealBloomPass experimental; `?stats=1` pinta abajo un overlay con el frustum
+de Cesium, draw calls, memoria de geometrías/texturas, sprites vivos del pool y
+cráteres.
+
+### Audio (`AudioEngine`)
+
+El bloque **Audio** del panel controla volumen maestro y silencio (tecla `M`);
+el ajuste se recuerda entre sesiones. Todo es síntesis WebAudio, sin ficheros:
+
+- el estampido llega con **retardo real** (`d / a(h)`) y **sin agudos** (la
+  absorción del aire recorta a 3.5 kHz al kilómetro y a 775 Hz a 20 km);
+- hay **cola de eco** (dos convoluciones, corta y de valle) que crece con la
+  distancia, y **panorámica estéreo** desde los ejes de la cámara;
+- un fusil suena a fusil y un 203 mm a 203 mm: el timbre escala con el calibre;
+- el paso supersónico es una **onda N de dos frentes** separados por `L/v`;
+- si estás en la zona de impacto oyes el **silbido con Doppler** del proyectil
+  entrante, terminando justo cuando llega la detonación;
+- la mecánica suena: motor de puntería mientras el arma gira, culata, bandeja
+  de carga, llegada a batería y casquillos.
+
+Sin WebAudio (o con el contexto bloqueado) la simulación sigue igual, muda.
+
+### Sala de armas (`/armory.html`)
+
+Página aparte que monta solo la capa Three —sin globo, sin física, sin red— para
+ver de cerca cada arma con su ciclo mecánico completo, comparar las siluetas de
+los proyectiles a escala (rejilla de 1 m) y probar las voces del audio a
+distintas distancias. `npm run dev` la sirve en `/armory.html`; también entra en
+el build de producción.
 
 ### Edificios 3D fotorrealistas (Google Earth) — opcional
 
@@ -133,5 +161,11 @@ sigue permitiendo demostrar toda la física.
 | `src/frame.ts` | Única frontera ENU↔ECEF (como el bridge de la era Unreal) |
 | `src/BallisticsService.ts` | Terreno real muestreado + meteo + solves async |
 | `src/ProjectilePresenter.ts` | Reproduce el `FlightResult`; física y render desacoplados |
+| `src/GunModel.ts` | Pieza 3D procedural: servos, retroceso en dos fases, ciclo de carga |
 | `src/render/ThreeOverlay.ts` | Cámara Three esclava de Cesium, render relativo a cámara |
+| `src/render/ProjectileModel.ts` | Silueta y animación del proyectil (giro, aletas, tobera) |
+| `src/vfx/AudioEngine.ts` | Audio sintetizado con propagación física (retardo, absorción, reverb) |
 | `src/vfx/` · `src/ui/` | Efectos procedurales y consola de tiro / HUD / meteo |
+
+Modelos, aproximaciones y límites de la capa de presentación en
+[`../docs/AUDIO_Y_ANIMACION.md`](../docs/AUDIO_Y_ANIMACION.md).

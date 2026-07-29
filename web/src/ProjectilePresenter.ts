@@ -3,19 +3,28 @@
 //
 //  La física es autoritativa y se calculó de una vez (FlightResult); este
 //  presentador solo REPRODUCE el camino muestreado en el tiempo (búsqueda
-//  binaria + lerp, como el EvaluatePath de la capa Unreal), mueve la malla
+//  binaria + lerp, como el EvaluatePath de la capa Unreal), mueve el modelo
 //  con la nariz al vector velocidad, alimenta la estela/cono de choque y al
 //  final orquesta explosión + boom + sacudida. Soporta timeDilation (para el
 //  bullet-time) y startDelay (para salvas MRSI).
+//
+//  P-ANI.2 — la malla ya no es un cilindro con un cono: es un ProjectileModel
+//  con la silueta real de su familia, que gira sobre su eje según el estriado,
+//  despliega aletas, enciende la tobera mientras el motor quema y se pone al
+//  rojo si reentra hipersónico.
+//
+//  P-AUD.1 — cada evento sonoro lleva su cue espacial (distancia, panorámica
+//  y si suena a la espalda) y el silbido del proyectil entrante se programa
+//  para terminar exactamente cuando llega el estampido del impacto.
 // ============================================================================
 import * as THREE from 'three';
 import { FlightResult, Vec3, Weapon } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { ThreeOverlay } from './render/ThreeOverlay';
-import { makeGlowSprite } from './render/PostFX';
+import { ProjectileModel } from './render/ProjectileModel';
 import { CraterLayer } from './vfx/CraterLayer';
 import { ShockConeFX, TrailFX, VfxManager } from './vfx/effects';
-import { AudioBoom } from './vfx/AudioBoom';
+import { AudioEngine } from './vfx/AudioEngine';
 
 export interface Telemetry {
   t: number;
@@ -45,9 +54,9 @@ export class ProjectilePresenter {
   private impacted = false;
   private disposeAt = Number.POSITIVE_INFINITY;
   private crackDone = false;
+  private whistleDone = false;
 
-  private readonly mesh: THREE.Group;
-  private readonly tracerGlow: THREE.Sprite;
+  private readonly model: ProjectileModel;
   private readonly trail: TrailFX;
   private readonly shock: ShockConeFX;
   private readonly flightDuration: number;
@@ -59,7 +68,7 @@ export class ProjectilePresenter {
     private readonly service: BallisticsService,
     private readonly overlay: ThreeOverlay,
     private readonly vfx: VfxManager,
-    private readonly audio: AudioBoom,
+    private readonly audio: AudioEngine,
     /** P-NEXT.7 — capa de cráteres persistentes (null = sin marca). */
     private readonly craters: CraterLayer | null,
     readonly weapon: Weapon,
@@ -76,30 +85,11 @@ export class ProjectilePresenter {
     // P0.1 hecho bien de nacimiento: el yield viaja con el FlightResult.
     this.yieldScale = Math.cbrt(flight.warheadTNTeq / 6.6);
 
-    // Malla: cuerpo cilíndrico + ojiva, orientada a +Z local.
-    const d = weapon.round.diameter;
-    const len = d * 6.5;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(d / 2, d / 2, len * 0.7, 16),
-      new THREE.MeshStandardMaterial({ color: 0x4c5157, metalness: 0.65, roughness: 0.35 }),
-    );
-    const nose = new THREE.Mesh(
-      new THREE.ConeGeometry(d / 2, len * 0.3, 16),
-      new THREE.MeshStandardMaterial({ color: 0x394047, metalness: 0.6, roughness: 0.4 }),
-    );
-    body.rotation.x = Math.PI / 2; // eje del cilindro -> Z
-    nose.rotation.x = Math.PI / 2;
-    nose.position.z = len * 0.5;
-    this.mesh = new THREE.Group();
-    this.mesh.add(body, nose);
-    this.mesh.visible = false;
+    // P-ANI.2 — silueta real de la familia, con toda su animación dentro.
+    this.model = new ProjectileModel(weapon);
+    this.model.group.visible = false;
+    overlay.enuRoot.add(this.model.group);
 
-    // Trazador: halo pequeño para que el proyectil se lea a kilómetros.
-    this.tracerGlow = makeGlowSprite(0xfff1cf, 2);
-    this.tracerGlow.visible = false;
-    this.mesh.add(this.tracerGlow);
-
-    overlay.enuRoot.add(this.mesh);
     this.trail = vfx.makeTrail();
     this.shock = new ShockConeFX(overlay.enuRoot);
   }
@@ -182,13 +172,13 @@ export class ProjectilePresenter {
     }
     if (this.impacted) return true;
 
-    this.elapsed += dtWall * this.timeDilation;
+    const dtSim = dtWall * this.timeDilation;
+    this.elapsed += dtSim;
     if (this.elapsed < 0) return true; // esperando su turno (MRSI)
 
     if (!this.launched) {
       this.launched = true;
-      this.mesh.visible = true;
-      this.tracerGlow.visible = true;
+      this.model.group.visible = true;
       this.handleLaunch();
     }
 
@@ -199,7 +189,8 @@ export class ProjectilePresenter {
 
     const s = this.evaluate(this.elapsed);
     const blend = Math.max(0, 1 - this.elapsed / 1.0); // funde boca -> física
-    this.mesh.position.set(
+    const pos = this.model.group.position;
+    pos.set(
       s.pos.x + this.launchOffset.x * blend,
       s.pos.y + this.launchOffset.y * blend,
       s.pos.z + this.launchOffset.z * blend,
@@ -207,28 +198,84 @@ export class ProjectilePresenter {
     const speed = s.vel.length();
     if (speed > 1e-6) {
       const dir = new THREE.Vector3(s.vel.x / speed, s.vel.y / speed, s.vel.z / speed);
-      this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+      this.model.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
       // Cono de choque: aparece por encima de ~Mach 0.9 (como en Unreal).
       const shockStrength = Math.min(1, Math.max(0, (s.mach - 0.9) / 0.6));
-      this.shock.set(this.mesh.position, dir, shockStrength);
+      this.shock.set(pos, dir, shockStrength);
     }
 
-    // Trazador legible a cualquier distancia (escala con la distancia).
+    // Animación del proyectil: giro, precesión, aletas, tobera, escala.
     const camEnu = this.overlay.cameraEnu();
-    const dist = camEnu.distanceTo(this.mesh.position);
-    this.tracerGlow.scale.setScalar(Math.min(40, Math.max(1.2, dist * 0.006)));
+    const dist = camEnu.distanceTo(pos);
+    const thrusting = this.isThrusting(this.elapsed);
+    this.model.update(dtSim, {
+      elapsed: this.elapsed,
+      speed,
+      mach: s.mach,
+      thrusting,
+      camDistance: dist,
+    });
 
     // Estela: condensación transónica / exhausto del motor (P-WEB.5).
-    const thrusting =
-      this.weapon.round.motor.enabled && this.elapsed < this.weapon.round.motor.burnTime;
-    this.trail.feed(dtWall * this.timeDilation, this.mesh.position, s.mach, s.pos.z, thrusting);
+    this.trail.feed(dtSim, pos, s.mach, s.pos.z, thrusting);
 
-    // Chasquido supersónico al pasar cerca de la cámara (P3.2).
-    if (!this.crackDone && s.mach > 1.05 && dist < 700) {
-      this.crackDone = true;
-      this.audio.boom('crack', dist, this.service.soundSpeedAt(camEnu.z), 0.8);
-    }
+    this.tickIncomingAudio(s.mach, dist, camEnu);
     return true;
+  }
+
+  /** El motor empuja ahora (respeta el retardo de ignición de los RAP). */
+  private isThrusting(t: number): boolean {
+    const m = this.weapon.round.motor;
+    if (!m.enabled) return false;
+    const t0 = m.ignitionDelayS;
+    return t >= t0 && t < t0 + m.burnTime;
+  }
+
+  /**
+   * Audio de proximidad: el chasquido supersónico al pasar cerca y el silbido
+   * del proyectil entrante, programado para morir cuando llega el estampido.
+   */
+  private tickIncomingAudio(mach: number, dist: number, camEnu: THREE.Vector3): void {
+    const cue = this.overlay.audioCueFor(this.model.group.position);
+    const cal = this.weapon.round.diameter;
+
+    if (!this.crackDone && mach > 1.05 && dist < 700) {
+      this.crackDone = true;
+      this.audio.boom('crack', {
+        distanceM: dist,
+        soundSpeed: this.service.soundSpeedAt(camEnu.z),
+        energy: 0.85,
+        pan: cue.pan,
+        behind: cue.behind,
+        caliberM: cal,
+      });
+    }
+
+    // Silbido: solo si el oyente está en la zona del impacto (es lo que oye
+    // quien lo recibe, no quien lo dispara).
+    if (this.whistleDone) return;
+    const remaining = this.flightDuration - this.elapsed;
+    const impact = this.flight.impactPoint;
+    const listenerToImpact = camEnu.distanceTo(
+      new THREE.Vector3(impact.x, impact.y, impact.z),
+    );
+    if (listenerToImpact > 1200 || remaining > 4.5) return;
+
+    this.whistleDone = true;
+    const c = this.service.soundSpeedAt(camEnu.z);
+    const dur = Math.min(2.6, Math.max(0.6, remaining));
+    // El silbido debe acabar cuando el estampido del impacto llega al oyente.
+    const arrival = remaining + listenerToImpact / c;
+    this.audio.whistle({
+      delayS: Math.max(0.01, arrival - dur),
+      durS: dur,
+      closingSpeed: Math.max(0, this.flight.impactSpeed),
+      soundSpeed: c,
+      distanceM: Math.max(60, listenerToImpact),
+      pan: cue.pan,
+      energy: Math.min(1.3, this.yieldScale),
+      caliberM: cal,
+    });
   }
 
   private handleLaunch(): void {
@@ -241,22 +288,29 @@ export class ProjectilePresenter {
     const v0 = this.flight.path.length ? this.flight.path[0].velocity : new Vec3(0, 0, 1);
     const rho = this.service.atmo.densityAt(muzzle.z + this.service.frame.heightM);
     const scale = Math.max(0.6, Math.cbrt(this.weapon.round.diameter / 0.155));
-    this.vfx.launchSignature(muzzle, v0, rho, scale);
+    this.vfx.launchSignature(muzzle, v0, rho, scale, this.weapon.category);
     this.onLaunch?.();
 
+    const cue = this.overlay.audioCueFor(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
     const camEnu = this.overlay.cameraEnu();
-    const dist = camEnu.distanceTo(new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z));
-    this.audio.boom('muzzle', dist, this.service.soundSpeedAt(camEnu.z), scale);
+    this.audio.boom(this.weapon.category === 'SmallArms' ? 'muzzleSmall' : 'muzzle', {
+      distanceM: cue.distanceM,
+      soundSpeed: this.service.soundSpeedAt(camEnu.z),
+      energy: scale,
+      pan: cue.pan,
+      behind: cue.behind,
+      caliberM: this.weapon.round.diameter,
+    });
   }
 
   private handleImpact(): void {
     this.impacted = true;
     const impact = this.flight.impactPoint;
-    this.mesh.visible = false;
-    this.shock.set(this.mesh.position, new THREE.Vector3(0, 0, -1), 0);
+    this.model.group.visible = false;
+    this.shock.set(this.model.group.position, new THREE.Vector3(0, 0, -1), 0);
     this.trail.finish();
 
-    this.vfx.impactExplosion(impact, this.yieldScale);
+    this.vfx.impactExplosion(impact, this.yieldScale, this.flight.impactSpeed);
     // P-NEXT.7 — huella persistente: quemadura + labio de tierra. El decal se
     // clava al SUELO VISUAL (teselas 3D / terreno real): la z de física puede
     // diferir de lo que se ve (corredor interpolado, edificios de Google).
@@ -270,23 +324,22 @@ export class ProjectilePresenter {
         .catch(() => craters.add(impact, yieldEq));
     }
 
-    const camEnu = this.overlay.cameraEnu();
-    const dist = camEnu.distanceTo(new THREE.Vector3(impact.x, impact.y, impact.z));
-    this.audio.boom('impact', dist, this.service.soundSpeedAt(impact.z), this.yieldScale);
+    const cue = this.overlay.audioCueFor(new THREE.Vector3(impact.x, impact.y, impact.z));
+    this.audio.boom('impact', {
+      distanceM: cue.distanceM,
+      soundSpeed: this.service.soundSpeedAt(impact.z),
+      energy: this.yieldScale,
+      pan: cue.pan,
+      behind: cue.behind,
+      caliberM: this.weapon.round.diameter,
+    });
 
     this.onImpact?.(impact, this.yieldScale, this.flight.impactSpeed);
     this.disposeAt = performance.now() / 1000 + 6.0; // deja asentarse humo/cámara
   }
 
   dispose(): void {
-    this.overlay.enuRoot.remove(this.mesh);
-    this.mesh.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
-        (o.material as THREE.Material).dispose();
-      }
-    });
-    this.tracerGlow.material.dispose();
+    this.model.dispose();
     this.shock.dispose();
   }
 }

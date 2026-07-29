@@ -7,12 +7,13 @@
 //  solo reproducen; cada frame actualiza presentadores, VFX y cámara.
 // ============================================================================
 import * as Cesium from 'cesium';
+import * as THREE from 'three';
 import { createViewer, GoogleTiles } from './viewer';
 import { BallisticsService } from './BallisticsService';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { maybeAttachBloom } from './render/PostFX';
 import { VfxManager, puffPoolStats } from './vfx/effects';
-import { AudioBoom } from './vfx/AudioBoom';
+import { AudioEngine } from './vfx/AudioEngine';
 import { CraterLayer } from './vfx/CraterLayer';
 import { TrajectoryPreview } from './TrajectoryPreview';
 import { CameraDirector } from './CameraDirector';
@@ -40,7 +41,7 @@ async function boot(): Promise<void> {
   const overlay = new ThreeOverlay(viewer, service.frame);
   maybeAttachBloom(overlay);
   const vfx = new VfxManager(overlay.enuRoot, (pos) => service.atmo.windAt(pos, 0));
-  const audio = new AudioBoom();
+  const audio = new AudioEngine();
   const craters = new CraterLayer(overlay.enuRoot); // P-NEXT.7
   const preview = new TrajectoryPreview(viewer, () => service.frame);
   const director = new CameraDirector(viewer, service);
@@ -113,7 +114,18 @@ async function boot(): Promise<void> {
       preview.setArcVisible(visible);
       if (visible) piece.schedulePreview(0); // re-pinta el arco al volver
     },
+    onVolume: (v) => {
+      audio.unlock(); // tocar el volumen ES un gesto de usuario: desbloquea
+      audio.setVolume(v);
+      panel.setAudioState(audio.masterVolume, audio.isMuted);
+    },
+    onMute: (m) => {
+      audio.unlock();
+      audio.setMuted(m);
+      panel.setAudioState(audio.masterVolume, audio.isMuted);
+    },
   });
+  panel.setAudioState(audio.masterVolume, audio.isMuted);
 
   // Los edificios 3D NUNCA entran solos: siempre a golpe de toggle (cuota).
 
@@ -147,6 +159,25 @@ async function boot(): Promise<void> {
 
   // P-PRO.1 — la pieza por fin se VE: modelo procedural que apunta en vivo.
   gun = new GunModel(overlay.enuRoot, panel.weapon());
+
+  // P-ANI.1 / P-AUD.1 — el ciclo mecánico del arma suena donde está el arma:
+  // la culata, la bandeja de carga y el casquillo llevan su cue espacial.
+  gun.onMech = (event) => {
+    const m = gun.muzzleWorldEnu();
+    const cue = overlay.audioCueFor(new THREE.Vector3(m.x, m.y, m.z));
+    audio.mech(event === 'casing' ? 'casing' : event, {
+      distanceM: cue.distanceM,
+      soundSpeed: service.soundSpeedAt(0),
+      pan: cue.pan,
+      behind: cue.behind,
+      energy: Math.cbrt(panel.weapon().round.diameter / 0.155),
+    });
+  };
+  // Al abrir la culata sale el humo que quedaba en el ánima.
+  gun.onBoreSmoke = (posEnu, dirEnu) => {
+    vfx.boreSmoke(posEnu, dirEnu, Math.cbrt(panel.weapon().round.diameter / 0.155));
+  };
+
   piece = new ArtilleryPiece(
     service, overlay, vfx, audio, preview, director, panel, hud, craters, gun,
   );
@@ -309,6 +340,9 @@ async function boot(): Promise<void> {
     last = now;
     piece.update(dt);
     gun.update(dt, panel.azimuthDeg, panel.elevationDeg); // P-PRO.1 — apunta en vivo
+    // P-AUD.1 — el motor de puntería zumba mientras el arma gira de verdad,
+    // y se calla cuando llega a su sitio. Solo se oye si estás al lado.
+    audio.servo(overlay.cameraEnu().length() < 260 ? gun.slewRateDegS : 0);
     gunnerHud.setVisible(director.mode === 'cabin');
     gunnerHud.render(dt);
     vfx.update(dt, overlay.cameraEnu());
@@ -318,7 +352,11 @@ async function boot(): Promise<void> {
       statsAcc = 0;
       const info = overlay.renderer.info;
       const pool = puffPoolStats();
-      statsEl.textContent =
+      const fr = viewer.camera.frustum;
+      const nf = fr instanceof Cesium.PerspectiveFrustum
+        ? `near ${fr.near?.toFixed(1)} far ${fr.far?.toFixed(0)} fov ${Cesium.Math.toDegrees(fr.fov ?? 0).toFixed(0)}º · `
+        : '';
+      statsEl.textContent = nf +
         `three ${info.render.calls} calls · ${info.render.triangles} tris · ` +
         `geo ${info.memory.geometries} · tex ${info.memory.textures} · ` +
         `sprites ${pool.live} vivos / pool ${pool.created} (${pool.free} libres) · ` +

@@ -89,6 +89,33 @@ export class ThreeOverlay {
     return new THREE.Vector3(enu.x, enu.y, enu.z);
   }
 
+  /** Eje "derecha" de la cámara en ENU — panorámica estéreo del audio. */
+  cameraRightEnu(): THREE.Vector3 {
+    const r = this.frame.ecefVectorToEnu(this.viewer.camera.rightWC);
+    return new THREE.Vector3(r.x, r.y, r.z);
+  }
+
+  /** Eje de vista de la cámara en ENU — detecta fuentes a la espalda. */
+  cameraForwardEnu(): THREE.Vector3 {
+    const d = this.frame.ecefVectorToEnu(this.viewer.camera.directionWC);
+    return new THREE.Vector3(d.x, d.y, d.z);
+  }
+
+  /**
+   * Cue espacial de audio para un punto ENU: distancia, panorámica y si la
+   * fuente queda a la espalda. Lo consume AudioEngine.
+   */
+  audioCueFor(posEnu: THREE.Vector3): { distanceM: number; pan: number; behind: boolean } {
+    const cam = this.cameraEnu();
+    const to = posEnu.clone().sub(cam);
+    const distanceM = to.length();
+    if (distanceM < 1e-3) return { distanceM: 0, pan: 0, behind: false };
+    to.divideScalar(distanceM);
+    const pan = Math.max(-1, Math.min(1, to.dot(this.cameraRightEnu())));
+    const behind = to.dot(this.cameraForwardEnu()) < -0.1;
+    return { distanceM, pan, behind };
+  }
+
   /** Sincroniza cámara con Cesium y pinta. Llamar en scene.postRender. */
   render(): void {
     const cam = this.viewer.camera;

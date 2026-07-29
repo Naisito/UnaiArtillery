@@ -50,6 +50,17 @@ export class CameraDirector {
   private smoothedAim: Vec3 | null = null;
   private shakeAmp = 0;
   private shakeAge = 0;
+  /** P-CAM.3 — patada de FOV al disparar: el encuadre "respira" con el tiro. */
+  private fovKick = 0;
+  private fovKickAge = 0;
+  private baseFovDeg = 0;
+  /** Traslación y rotación de sacudida aplicadas: se deshacen cada frame. */
+  private shakeApplied: {
+    right: Cesium.Cartesian3; up: Cesium.Cartesian3; dir: Cesium.Cartesian3;
+    mx: number; my: number; mz: number;
+    pitchAxis: Cesium.Cartesian3; pitch: number;
+    rollAxis: Cesium.Cartesian3; roll: number;
+  } | null = null;
 
   // -- Seguir orbitable: offsets que controla el usuario ---------------------
   private followZoom = 1.0;      // rueda: multiplica la distancia automática
@@ -199,7 +210,51 @@ export class CameraDirector {
     this.shake(amp);
   }
 
+  /**
+   * P-CAM.3 — culatazo visto por la cámara: sacudida corta y "patada" de FOV
+   * (el frustum se abre unos grados y se cierra en ~0.35 s). Solo se nota si
+   * estás cerca del arma: a 2 km un cañonazo no mueve la cámara.
+   */
+  kickFromMuzzle(muzzleEnu: Vec3, energyScale: number): void {
+    const cam = this.service.frame.ecefToEnu(this.viewer.camera.positionWC);
+    const dist = Math.max(6, cam.sub(muzzleEnu).length());
+    const amp = clamp(energyScale * 260 / dist, 0, 7);
+    if (amp < 0.05) return;
+    this.shake(amp);
+    // La patada de FOV solo tiene sentido de cerca (cabina, 1ª persona).
+    const f = this.viewer.camera.frustum;
+    if (dist < 120 && f instanceof Cesium.PerspectiveFrustum && f.fov) {
+      if (this.fovKick <= 0) this.baseFovDeg = Cesium.Math.toDegrees(f.fov);
+      this.fovKick = Math.max(this.fovKick, clamp(amp * 0.9, 0, 6));
+      this.fovKickAge = 0;
+    }
+  }
+
+  /** Relaja la patada de FOV hacia el valor base con muelle amortiguado. */
+  private tickFovKick(dt: number): void {
+    if (this.fovKick <= 0) return;
+    this.fovKickAge += dt;
+    const f = this.viewer.camera.frustum;
+    if (!(f instanceof Cesium.PerspectiveFrustum) || !f.fov) {
+      this.fovKick = 0;
+      return;
+    }
+    // Subida en 40 ms, vuelta exponencial en ~0.35 s.
+    const a = this.fovKickAge;
+    const env = a < 0.04 ? a / 0.04 : Math.exp(-(a - 0.04) / 0.12);
+    f.fov = Cesium.Math.toRadians(this.baseFovDeg + this.fovKick * env);
+    if (a > 0.6) {
+      f.fov = Cesium.Math.toRadians(this.baseFovDeg);
+      this.fovKick = 0;
+    }
+  }
+
   update(dt: number): void {
+    // P-CAM.3 — la sacudida del frame anterior se DESHACE antes de nada: así
+    // no se acumula en modo libre (donde nadie reescribe la orientación) y la
+    // cámara del usuario queda exactamente donde la dejó.
+    this.revertShake();
+
     // Bullet-time: rampa suave al acercarse el impacto del proyectil seguido.
     if (this.tracked) {
       if (this.tracked.isImpacted) {
@@ -214,6 +269,7 @@ export class CameraDirector {
     if (this.mode === 'fps') this.tickFps(dt);
     else if (this.mode !== 'free') this.tickMode(dt);
     this.tickShake(dt);
+    this.tickFovKick(dt);
   }
 
   /** 1ª persona: integración directa (sin amortiguar — respuesta de juego). */
@@ -296,7 +352,16 @@ export class CameraDirector {
         if (!lay) return;
         const azRad = (lay.azimuthDeg * Math.PI) / 180.0;
         const fwd = new Vec3(Math.sin(azRad), Math.cos(azRad), 0);
-        const eye = new Vec3(-fwd.x * 7.5, -fwd.y * 7.5, 3.4);
+        // P-CAM.3 — el ojo va DESPLAZADO A LA IZQUIERDA del tubo, en el puesto
+        // del apuntador: mirando por el eje del ánima solo se veía el tubo
+        // ocupando la pantalla entera. Así el arma queda encuadrada a la
+        // derecha y se ve elevarse, retroceder y soltar el fogonazo.
+        const left = new Vec3(-Math.cos(azRad), Math.sin(azRad), 0);
+        const eye = new Vec3(
+          -fwd.x * 6.5 + left.x * 2.2,
+          -fwd.y * 6.5 + left.y * 2.2,
+          2.9,
+        );
         desired = eye;
         // Cabeceo suave: 2º de base + fracción de la QE, tope 14º — el
         // horizonte queda siempre en pantalla y el arco de salida se ve.
@@ -340,6 +405,11 @@ export class CameraDirector {
     });
   }
 
+  /**
+   * Sacudida: traslación + ROTACIÓN (cabeceo y alabeo). Un impacto cercano no
+   * solo mueve la cámara de sitio; le da un tirón angular, que es lo que se
+   * lee de verdad en pantalla. Todo se registra para poder deshacerlo.
+   */
   private tickShake(dt: number): void {
     if (this.shakeAmp < 0.02) return;
     this.shakeAge += dt;
@@ -354,11 +424,44 @@ export class CameraDirector {
     const nx = Math.sin(t * 71.0) + 0.5 * Math.sin(t * 47.0 + 1.3);
     const ny = Math.sin(t * 63.0 + 2.1) + 0.5 * Math.sin(t * 41.0 + 0.4);
     const nz = Math.sin(t * 53.0 + 4.2);
+    const np = Math.sin(t * 83.0 + 1.1) + 0.4 * Math.sin(t * 37.0);
+    const nr = Math.sin(t * 67.0 + 3.4);
+
+    const cam = this.viewer.camera;
+    // Ejes clonados: son los que se usarán para deshacer en el frame siguiente.
+    const right = Cesium.Cartesian3.clone(cam.right, new Cesium.Cartesian3());
+    const up = Cesium.Cartesian3.clone(cam.up, new Cesium.Cartesian3());
+    const dir = Cesium.Cartesian3.clone(cam.direction, new Cesium.Cartesian3());
+
     // Hasta ~1.5 m de desplazamiento con amp=12: contundente sin marear.
-    const offset = new Cesium.Cartesian3(nx, ny, nz);
-    Cesium.Cartesian3.multiplyByScalar(offset, a * 0.12, offset);
-    this.viewer.camera.move(this.viewer.camera.right, offset.x);
-    this.viewer.camera.move(this.viewer.camera.up, offset.y);
-    this.viewer.camera.move(this.viewer.camera.direction, offset.z * 0.4);
+    const mx = nx * a * 0.12;
+    const my = ny * a * 0.12;
+    const mz = nz * a * 0.12 * 0.4;
+    cam.move(right, mx);
+    cam.move(up, my);
+    cam.move(dir, mz);
+
+    // Tirón angular: hasta ~0.6º de cabeceo y ~0.35º de alabeo con amp=12.
+    const pitch = Cesium.Math.toRadians(np * a * 0.05);
+    const roll = Cesium.Math.toRadians(nr * a * 0.03);
+    const pitchAxis = Cesium.Cartesian3.clone(cam.right, new Cesium.Cartesian3());
+    cam.look(pitchAxis, pitch);
+    const rollAxis = Cesium.Cartesian3.clone(cam.direction, new Cesium.Cartesian3());
+    cam.look(rollAxis, roll);
+
+    this.shakeApplied = { right, up, dir, mx, my, mz, pitchAxis, pitch, rollAxis, roll };
+  }
+
+  /** Deshace exactamente la sacudida del frame anterior (orden inverso). */
+  private revertShake(): void {
+    const s = this.shakeApplied;
+    if (!s) return;
+    this.shakeApplied = null;
+    const cam = this.viewer.camera;
+    cam.look(s.rollAxis, -s.roll);
+    cam.look(s.pitchAxis, -s.pitch);
+    cam.move(s.dir, -s.mz);
+    cam.move(s.up, -s.my);
+    cam.move(s.right, -s.mx);
   }
 }

@@ -28,6 +28,9 @@ export interface ControlCallbacks {
   onGoogleTiles(active: boolean): void;
   /** Ocultar la parábola de preview (modo inmersión: solo el proyectil). */
   onToggleArc(visible: boolean): void;
+  /** P-AUD.1 — volumen maestro (0..1) y silencio. */
+  onVolume(volume: number): void;
+  onMute(muted: boolean): void;
 }
 
 const WEAPON_LABELS: Record<WeaponId, string> = {
@@ -83,6 +86,10 @@ export class ControlPanel {
   private pickBtn!: HTMLButtonElement;
   private batteryBtn!: HTMLButtonElement;
   private googleBtn!: HTMLButtonElement;
+  private muteBtn!: HTMLButtonElement;
+  private volInput!: HTMLInputElement;
+  private volOut!: HTMLOutputElement;
+  private muted = false;
   private cameraBtns = new Map<CameraMode, HTMLButtonElement>();
 
   constructor(private readonly cb: ControlCallbacks) {
@@ -298,6 +305,42 @@ export class ControlPanel {
       this.cb.onGoogleTiles(!this.googleBtn.classList.contains('toggled'));
     el.appendChild(this.googleBtn);
 
+    // -- Audio (P-AUD.1) -------------------------------------------------------
+    const audioH = document.createElement('h3');
+    audioH.textContent = 'Audio';
+    el.appendChild(audioH);
+
+    const volRow = document.createElement('div');
+    volRow.className = 'row';
+    this.muteBtn = document.createElement('button');
+    this.muteBtn.className = 'icon-btn';
+    this.muteBtn.title = 'Silenciar / activar el sonido (tecla M)';
+    this.muteBtn.onclick = () => this.cb.onMute(!this.muted);
+    this.volInput = document.createElement('input');
+    this.volInput.type = 'range';
+    this.volInput.min = '0';
+    this.volInput.max = '100';
+    this.volInput.step = '1';
+    this.volInput.title =
+      'Volumen maestro. El estampido llega con retardo real (distancia / velocidad del sonido).';
+    this.volInput.oninput = () => {
+      const v = Number(this.volInput.value) / 100;
+      this.volOut.textContent = `${Math.round(v * 100)}%`;
+      this.cb.onVolume(v);
+    };
+    this.volOut = document.createElement('output');
+    volRow.append(this.muteBtn, this.volInput, this.volOut);
+    el.appendChild(volRow);
+
+    // Atajo global: M silencia (salvo escribiendo en un campo).
+    window.addEventListener('keydown', (ev) => {
+      if (ev.code !== 'KeyM' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const t = ev.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement ||
+          t instanceof HTMLTextAreaElement) return;
+      this.cb.onMute(!this.muted);
+    });
+
     this.rebuildRounds();
     this.rebuildCharges();
     this.applyWeaponLimits();
@@ -306,6 +349,16 @@ export class ControlPanel {
   /** Refleja el estado REAL de los edificios 3D (la carga puede fallar). */
   setGoogleTiles(on: boolean): void {
     this.googleBtn.classList.toggle('toggled', on);
+  }
+
+  /** P-AUD.1 — refleja el estado del motor de audio (que persiste su ajuste). */
+  setAudioState(volume: number, muted: boolean): void {
+    this.muted = muted;
+    this.volInput.value = String(Math.round(volume * 100));
+    this.volOut.textContent = muted ? 'mudo' : `${Math.round(volume * 100)}%`;
+    this.volInput.disabled = muted;
+    this.muteBtn.textContent = muted ? '🔇' : '🔊';
+    this.muteBtn.classList.toggle('toggled', muted);
   }
 
   /** Arma con la munición seleccionada aplicada (P-PRO.4). */

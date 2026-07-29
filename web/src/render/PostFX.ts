@@ -52,6 +52,7 @@ export function makeGlowSprite(color: THREE.ColorRepresentation, scaleM: number)
   });
   const sprite = new THREE.Sprite(mat);
   sprite.scale.setScalar(scaleM);
+  sprite.frustumCulled = false;
   return sprite;
 }
 

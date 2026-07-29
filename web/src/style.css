@@ -55,6 +55,12 @@ canvas.three-overlay {
 #controlPanel { top: 16px; left: 16px; width: 300px; }
 #weatherPanel { top: 16px; right: 16px; width: 260px; }
 
+/* --- Sala de armas (armory.html): banco de pruebas de modelos y audio ----- */
+#armoryCanvas { position: absolute; inset: 0; }
+#armoryCanvas canvas { display: block; }
+#armoryPanel { top: 16px; left: 16px; width: 300px; }
+#armoryInfo { top: 16px; right: 16px; width: 280px; }
+
 /* --- Cockpit de puntería (P-NEXT.1) -------------------------------------- */
 #cockpit {
   left: 16px;
@@ -145,6 +151,17 @@ button.fire:hover { background: #ffc76e; }
 }
 .btn-grid button.wide { grid-column: 1 / -1; }
 button.toggled { border-color: var(--accent2); color: var(--accent2); }
+
+/* --- Audio (P-AUD.1): botón de silencio + volumen maestro ----------------- */
+button.icon-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  padding: 4px 0;
+  text-align: center;
+  line-height: 1.2;
+}
+button.icon-btn.toggled { border-color: var(--danger); color: var(--danger); }
+.row output { min-width: 42px; text-align: right; }
 
 .hint { color: var(--dim); font-size: 12px; margin: 6px 0 0; }
 .readout { color: var(--accent2); font-variant-numeric: tabular-nums; }

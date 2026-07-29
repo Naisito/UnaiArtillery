@@ -8,6 +8,14 @@ export default defineConfig({
   plugins: [cesium()],
   build: {
     chunkSizeWarningLimit: 6000, // cesium.js es grande; es esperado
+    rollupOptions: {
+      // Dos páginas: la app (globo + física) y la sala de armas, un banco de
+      // pruebas de modelos/animación/audio que no carga Cesium ni la física.
+      input: {
+        main: 'index.html',
+        armory: 'armory.html',
+      },
+    },
   },
   test: {
     include: ['src/**/*.test.ts'],

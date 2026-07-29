@@ -54,10 +54,12 @@ UnaiArtillery/
 │   │   ├── BallisticsService.ts  servicio central: terreno real, meteo, solve
 │   │   ├── ArtilleryPiece.ts     ★ controlador del arma (aim/solve/fire/MRSI)
 │   │   ├── ProjectilePresenter.ts reproduce la trayectoria + telemetría
+│   │   ├── GunModel.ts           ★ pieza 3D animada: servos, retroceso, carga
 │   │   ├── TrajectoryPreview.ts  arco previsto, ápice/impacto, anillos de alcance
 │   │   ├── CameraDirector.ts     cámaras Orbital/Follow/Drone + bullet-time + shake
-│   │   ├── render/               overlay Three.js sincronizado con Cesium + glow
-│   │   ├── vfx/                  fogonazo, humo, estela, explosión, boom sónico
+│   │   ├── armory.ts             sala de armas (/armory.html): banco de pruebas
+│   │   ├── render/               overlay Three.js + ProjectileModel + glow
+│   │   ├── vfx/                  fogonazo, humo, estela, explosión, AudioEngine
 │   │   └── ui/                   consola de tiro, meteorología, HUD de telemetría
 │   ├── tools/                    firing_table.ts (CLI) · calibrate_bc.ts
 │   └── src-tauri/                empaquetado de escritorio (Tauri v2)
@@ -65,7 +67,8 @@ UnaiArtillery/
 ├── core/                       ← núcleo C++ original (referencia validada, se conserva)
 ├── tests/validation.cpp        arnés C++ (sigue corriendo en CI)
 ├── Source/UnaiArtillery/       ← capa Unreal LEGADO (sustituida por web/)
-└── docs/                       TDD · ARCHITECTURE · FISICA_WEB · MEJORAS_PROMPTS
+└── docs/                       TDD · ARCHITECTURE · FISICA_WEB · AUDIO_Y_ANIMACION
+                                MEJORAS_PROMPTS · MEJORAS_4A_OLA
 ```
 
 ---
@@ -83,10 +86,22 @@ UnaiArtillery/
   temperatura y presión; el arco de preview se recalcula al momento.
 - **Telemetría en vivo**: Mach, altitud, velocidad, energía, arrastre, TOF, alcance
   y perfil del tiro en el HUD.
-- **Espectáculo**: fogonazo, humo que deriva con el viento, estela de condensación
-  transónica, explosión escalada por el yield real de cada munición, sacudida de
-  cámara por distancia, boom sónico que llega tarde (distancia/velocidad del sonido)
-  y bullet-time automático al llegar el impacto en la cámara de seguimiento.
+- **Espectáculo**: fogonazo en tres fases con pluma direccional por el ánima,
+  humo que deriva con el viento, estela de condensación transónica, explosión
+  escalada por el yield real con escombros de parábola verdadera, sacudida y
+  patada de FOV por distancia, y bullet-time automático al llegar el impacto en
+  la cámara de seguimiento.
+- **Maquinaria animada**: la pieza gira a la velocidad de sus servos reales
+  (13 º/s la torreta del M109, 5 º/s la cureña del M777), el tubo retrocede en
+  dos fases y vuelve a batería, la culata se abre, el atacador mete el proyectil
+  y el casquillo salta con física. Los proyectiles tienen ojiva tangente
+  calculada, banda de forzamiento, aletas que se despliegan y giro derivado del
+  paso del estriado.
+- **Audio con propagación física**: el estampido llega tarde
+  (distancia/velocidad del sonido), el aire se come los agudos con la distancia
+  (`α ≈ 1e-9·f²` dB/m: 11 kHz a 100 m, 775 Hz a 20 km), hay cola de eco de
+  valle, panorámica estéreo, onda N supersónica de dos frentes, silbido Doppler
+  del proyectil entrante y toda la mecánica del arma sonorizada.
 
 ---
 

@@ -15,7 +15,7 @@ import { GunModel } from './GunModel';
 import { ProjectilePresenter } from './ProjectilePresenter';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { TrajectoryPreview } from './TrajectoryPreview';
-import { AudioBoom } from './vfx/AudioBoom';
+import { AudioEngine } from './vfx/AudioEngine';
 import { CraterLayer } from './vfx/CraterLayer';
 import { VfxManager } from './vfx/effects';
 import { ControlPanel } from './ui/ControlPanel';
@@ -37,7 +37,7 @@ export class ArtilleryPiece {
     private readonly service: BallisticsService,
     private readonly overlay: ThreeOverlay,
     private readonly vfx: VfxManager,
-    private readonly audio: AudioBoom,
+    private readonly audio: AudioEngine,
     private readonly preview: TrajectoryPreview,
     private readonly director: CameraDirector,
     private readonly panel: ControlPanel,
@@ -287,10 +287,14 @@ export class ArtilleryPiece {
       this.service, this.overlay, this.vfx, this.audio, this.craters, weapon, flight, delay,
     );
     // P-PRO.1 — fogonazo/humo desde la punta REAL del tubo + retroceso.
-    if (this.gun) {
-      p.muzzleProvider = () => this.gun!.muzzleWorldEnu();
-      p.onLaunch = () => this.gun!.fireRecoil();
-    }
+    const gun = this.gun;
+    if (gun) p.muzzleProvider = () => gun.muzzleWorldEnu();
+    p.onLaunch = () => {
+      gun?.fireRecoil();
+      // P-CAM.3 — culatazo visto por la cámara: sacudida + patada de FOV.
+      const muzzle = gun ? gun.muzzleWorldEnu() : this.service.muzzleEnu;
+      this.director.kickFromMuzzle(muzzle, Math.cbrt(weapon.round.diameter / 0.155));
+    };
     p.onImpact = (impactEnu) => {
       this.director.shakeFromImpact(impactEnu, warheadTNTeq); // P0.1+P0.2
       this.director.setFocus(impactEnu); // orbital/dron miran al cráter
