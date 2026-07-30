@@ -128,6 +128,32 @@ control de volumen).
 
 ## 3. Animación del arma (`GunModel`)
 
+### 3.0 Una silueta por MONTAJE, no por categoría
+
+Antes la silueta la elegía `Weapon.category`, y eso hacía que las cuatro armas
+ligeras fuesen **la misma ametralladora de trípode** (una pistola con trípode),
+que los tres lanzacohetes fuesen idénticos y que el 2S7 Pion —un cañón de
+203 mm sobre cadenas— se pintase como un obús remolcado.
+
+Ahora el catálogo declara `Weapon.mount`, que es un dato real del sistema (no
+afecta a la trayectoria) y es lo que discrimina de verdad:
+
+| mount | arma | silueta |
+|---|---|---|
+| `handheld` | pistola 9 mm, fusil 5.56 | **tirador a escala** (1.75 m, casco y chaleco) que la sostiene: la pistola a dos manos con los brazos extendidos, el fusil al hombro con una mano en el guardamanos |
+| `bipod` | M240 7.62 | tumbada sobre bípode en V a la altura de un codo, cinta y caja lateral, culata de madera, asa de cambio de cañón |
+| `tripod` | M2 .50 | trípode alto arriostrado, receptor macizo, empuñaduras de pala con mariposa, cañón con manguito perforado |
+| `baseplate` | mortero 120 | placa base con nervios, bípode cuyo collar sigue al tubo |
+| `towed` | M777, Excalibur | ruedas, mazas abiertas, rejas clavadas, plataforma de tiro |
+| `trackedTurret` | M109A7 | cadenas + torreta cerrada con cesta, cúpula y ametralladora |
+| `trackedOpen` | 2S7 Pion | casco de cadenas largo, caseta de dotación delante, cañón L56 **al descubierto** sobre cureña abierta y pala hidráulica clavada detrás |
+| `wheeledLauncher` | HIMARS, ER GMLRS | camión **6×6** con UN pod (o dos contenedores sellados) |
+| `trackedLauncher` | M270 | casco de **cadenas** con DOS pods: doce cohetes frente a los seis del HIMARS |
+| `tel` | ATACMS, PrSM | camión 10×10 con uno o **dos** canisters (el PrSM va de dos en dos, que es justo su argumento) |
+
+Los pods son marcos abiertos de cuatro largueros: con una caja maciza no se
+veían ni los tubos ni los cohetes asomando por las bocas.
+
 ### 3.1 Servos de puntería
 
 El arma ya no se teletransporta a la orden del panel. Cada categoría tiene

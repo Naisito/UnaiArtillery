@@ -97,6 +97,11 @@ UnaiArtillery/
   y el casquillo salta con física. Los proyectiles tienen ojiva tangente
   calculada, banda de forzamiento, aletas que se despliegan y giro derivado del
   paso del estriado.
+- **Una silueta por sistema**: cada arma se modela por su MONTAJE real, no por
+  su categoría — un tirador a escala sostiene la pistola y el fusil, la M240 va
+  sobre bípode y la M2 sobre trípode; el M270 es de cadenas con dos pods y el
+  HIMARS un camión 6×6 con uno; el 2S7 lleva su cañón de 203 mm al descubierto
+  sobre cadenas con la pala clavada detrás.
 - **Audio con propagación física**: el estampido llega tarde
   (distancia/velocidad del sonido), el aire se come los agudos con la distancia
   (`α ≈ 1e-9·f²` dB/m: 11 kHz a 100 m, 775 Hz a 20 km), hay cola de eco de

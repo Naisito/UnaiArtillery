@@ -480,13 +480,21 @@ export class GunModel {
     this.reloadTime = Math.max(1.5, weapon.reloadTime);
     this.firstAim = true;
 
+    // La silueta la elige el MONTAJE, no la categoría: dentro de una misma
+    // categoría no se parecen en nada un M270 de cadenas y un HIMARS de
+    // ruedas, ni una pistola y una M2 sobre trípode.
     const d = weapon.round.diameter;
-    switch (weapon.category) {
-      case 'Mortar': this.buildMortar(d); break;
-      case 'Howitzer': this.buildHowitzer(d, weapon.traverseDeg >= 360); break;
-      case 'Rocket': this.buildRocket(d); break;
-      case 'Missile': this.buildMissile(d); break;
-      case 'SmallArms': this.buildSmallArm(d); break;
+    switch (weapon.mount) {
+      case 'baseplate': this.buildMortar(d); break;
+      case 'towed': this.buildTowedHowitzer(d); break;
+      case 'trackedTurret': this.buildTurretHowitzer(d); break;
+      case 'trackedOpen': this.buildOpenTrackedGun(d); break;
+      case 'wheeledLauncher': this.buildRocketTruck(d, weapon.launcherPods); break;
+      case 'trackedLauncher': this.buildRocketTracked(d, weapon.launcherPods); break;
+      case 'tel': this.buildMissileTel(d, weapon.launcherPods); break;
+      case 'handheld': this.buildHandheld(d, weapon.round.muzzleVelocity < 500); break;
+      case 'bipod': this.buildBipodMg(d); break;
+      case 'tripod': this.buildTripodMg(d); break;
     }
 
     // Recorrido de retroceso: proporcional al calibre, como el real (un 155
@@ -845,65 +853,304 @@ export class GunModel {
   }
 
   // -------------------------------------------------------------------------
-  //  Armas ligeras
+  //  Armas ligeras — cuatro siluetas distintas, no una ametralladora repetida
   // -------------------------------------------------------------------------
-  /** Trípode + cajón de mecanismos + cañón con manguito, a escala real (~1.7 m). */
-  private buildSmallArm(d: number): void {
+
+  /**
+   * Tirador esquemático a escala humana (1.75 m). Da la referencia de tamaño
+   * que le falta a un arma de mano suelta en mitad del campo, y la sostiene:
+   * sin él, un fusil flotando parecía una maqueta sin escala.
+   * `crouch` lo pone en rodilla en tierra (fusil) o de pie (pistola).
+   */
+  private buildShooter(pistolGrip: boolean): { handZ: number } {
+    const cloth = this.mat(0x4c5340, 0.1, 0.9);
+    const gear = this.mat(0x33372c, 0.15, 0.85);
+    const skin = this.mat(0x9c7856, 0.05, 0.9);
+    const boot = this.mat(0x241f1b, 0.2, 0.8);
+
+    const backY = -0.34;               // el tirador va DETRAS del arma
+    const hipZ = 0.92;
+    const chestZ = 1.34;
+    const handZ = chestZ;              // el arma, a la altura del hombro
+
+    // Piernas de pie, una adelantada: postura de tiro, no una zancada.
+    for (const sx of [-1, 1]) {
+      const hip = new THREE.Vector3(sx * 0.13, backY, hipZ);
+      const foot = new THREE.Vector3(sx * 0.19, backY + (sx > 0 ? 0.16 : -0.2), 0.1);
+      this.turret.add(this.strut(hip, foot, 0.085, cloth));
+      const shoe = this.box(0.13, 0.28, 0.09, boot);
+      shoe.position.set(foot.x, foot.y + 0.05, 0.045);
+      shoe.rotation.z = -sx * 10 * DEG;
+      this.turret.add(shoe);
+    }
+
+    // Torso ligeramente inclinado hacia el arma + chaleco.
+    const hips = this.box(0.33, 0.22, 0.2, cloth);
+    hips.position.set(0, backY, hipZ);
+    const chest = this.box(0.4, 0.25, 0.42, cloth);
+    chest.position.set(0, backY + 0.03, hipZ + 0.28);
+    chest.rotation.x = -6 * DEG;
+    const vest = this.box(0.44, 0.29, 0.28, gear);
+    vest.position.set(0, backY + 0.03, hipZ + 0.28);
+    vest.rotation.x = -6 * DEG;
+    this.turret.add(hips, chest, vest);
+
+    // Cabeza y casco, mirando por encima del arma.
+    const head = this.mesh(new THREE.SphereGeometry(0.1, 12, 10), skin);
+    head.position.set(0, backY + 0.04, chestZ + 0.2);
+    const helmet = this.mesh(
+      new THREE.SphereGeometry(0.128, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), gear,
+    );
+    helmet.rotation.x = -Math.PI / 2;
+    helmet.position.set(head.position.x, head.position.y, head.position.z + 0.025);
+    this.turret.add(head, helmet);
+
+    // Brazos hasta donde AGARRAN de verdad: con fusil, una mano en la
+    // empuñadura y otra adelante en el guardamanos; con pistola, las dos
+    // juntas al frente y los brazos extendidos.
+    const grips: [number, number, number][] = pistolGrip
+      ? [[0.05, -0.03, handZ], [-0.05, -0.05, handZ]]
+      : [[0.06, -0.09, handZ - 0.06], [-0.05, 0.3, handZ - 0.02]];
+    grips.forEach(([hx, hy, hz], i) => {
+      const sx = i === 0 ? 1 : -1;
+      const shoulder = new THREE.Vector3(sx * 0.2, backY + 0.03, chestZ + 0.08);
+      const hand = new THREE.Vector3(hx, hy, hz);
+      // Codo: el brazo se dobla, así que se pinta en dos tramos.
+      const elbow = new THREE.Vector3(
+        (shoulder.x + hand.x) / 2 + sx * 0.09,
+        (shoulder.y + hand.y) / 2 - 0.06,
+        (shoulder.z + hand.z) / 2 - 0.11,
+      );
+      this.turret.add(this.strut(shoulder, elbow, 0.058, cloth));
+      this.turret.add(this.strut(elbow, hand, 0.05, cloth));
+      const glove = this.mesh(new THREE.SphereGeometry(0.05, 8, 6), gear);
+      glove.position.copy(hand);
+      this.turret.add(glove);
+    });
+    return { handZ };
+  }
+
+  /** Registra el casquillo compartido (todas las armas ligeras lo eyectan). */
+  private setupCasings(d: number, scale = 4.2): void {
+    this.ejectsCasing = true;
+    this.hasBreechCycle = true;
+    this.casingSize = Math.max(0.02, d * scale);
+    const cs = this.casingSize;
+    this.casingGeo = new THREE.CylinderGeometry(cs * 0.34, cs * 0.4, cs, 10);
+    this.casingMat = this.mat(0xb98b3c, 0.9, 0.3);
+    this.disposables.push(this.casingGeo);
+  }
+
+  /**
+   * Arma de mano sostenida por un tirador: PISTOLA (corredera que retrocede,
+   * cañón corto, empuñadura con cargador) o FUSIL (cajón, guardamanos con
+   * raíles, cargador curvo, culata y pistol grip). Nada que ver con una
+   * ametralladora de trípode.
+   */
+  private buildHandheld(d: number, isPistol: boolean): void {
+    const dark = this.mat(0x232629, 0.5, 0.5);
+    const steel = this.mat(0x4a5054, 0.75, 0.3);
+    const poly = this.mat(0x2f3a2c, 0.05, 0.85);   // polímero del armazón
+
+    const { handZ } = this.buildShooter(isPistol);
+    const barrelLen = isPistol ? Math.max(0.1, d * 12) : Math.max(0.4, d * 65);
+
+    if (isPistol) {
+      // Corredera (retrocede al disparar) sobre el armazón fijo.
+      const slide = this.box(0.032, 0.19, 0.038, steel);
+      slide.position.set(0, 0.02, 0.012);
+      const ejection = this.box(0.034, 0.05, 0.012, dark);
+      ejection.position.set(0.006, 0.06, 0.03);
+      this.recoiling.add(slide, ejection);
+      const frame = this.box(0.03, 0.15, 0.03, poly);
+      frame.position.set(0, -0.01, -0.022);
+      const grip = this.box(0.03, 0.05, 0.11, poly);
+      grip.position.set(0, -0.07, -0.075);
+      grip.rotation.x = 14 * DEG;
+      const magBase = this.box(0.032, 0.052, 0.012, dark);
+      magBase.position.set(0, -0.078, -0.132);
+      const trigger = this.box(0.012, 0.02, 0.03, dark);
+      trigger.position.set(0, -0.035, -0.048);
+      this.cradle.add(frame, grip, magBase, trigger);
+      // Alza y punto de mira sobre la corredera.
+      for (const [y, w] of [[-0.06, 0.022], [0.085, 0.008]] as const) {
+        const sight = this.box(w, 0.008, 0.012, dark);
+        sight.position.set(0, y, 0.034);
+        this.recoiling.add(sight);
+      }
+      this.installBarrel({
+        pivotY: 0.0, pivotZ: handZ,
+        length: barrelLen, rMuzzle: d * 0.72, rBreech: d * 0.95, backLen: 0.02,
+        mat: steel, darkMat: dark, recuperators: false,
+      });
+      this.setupCasings(d, 2.6);
+      return;
+    }
+
+    // --- Fusil ---------------------------------------------------------------
+    const receiver = this.box(0.048, 0.3, 0.075, poly);
+    receiver.position.set(0, 0.02, 0);
+    const upper = this.box(0.05, 0.26, 0.045, dark);
+    upper.position.set(0, 0.05, 0.05);
+    const handguard = this.box(0.052, 0.26, 0.06, dark);
+    handguard.position.set(0, 0.3, 0.006);
+    this.recoiling.add(receiver, upper, handguard);
+    for (const sx of [-1, 1]) {
+      const rail = this.box(0.008, 0.24, 0.012, steel);
+      rail.position.set(sx * 0.03, 0.3, 0.02);
+      this.recoiling.add(rail);
+    }
+    // Cargador curvo, empuñadura, tubo de recuperación y culata retráctil.
+    const mag = this.box(0.03, 0.055, 0.17, dark);
+    mag.position.set(0, 0.02, -0.115);
+    mag.rotation.x = -10 * DEG;
+    const grip = this.box(0.034, 0.06, 0.12, poly);
+    grip.position.set(0, -0.09, -0.085);
+    grip.rotation.x = 18 * DEG;
+    const buffer = this.tubeMesh(0.024, 0.024, 0.12, dark, 10);
+    buffer.position.set(0, -0.2, 0.012);
+    const stock = this.box(0.05, 0.16, 0.075, poly);
+    stock.position.set(0, -0.26, 0.0);
+    const butt = this.box(0.055, 0.03, 0.11, dark);
+    butt.position.set(0, -0.335, -0.005);
+    this.cradle.add(mag, grip, buffer, stock, butt);
+    const optic = this.box(0.04, 0.11, 0.05, dark);
+    optic.position.set(0, 0.06, 0.095);
+    this.recoiling.add(optic);
+
+    this.installBarrel({
+      pivotY: 0.0, pivotZ: handZ,
+      length: barrelLen, rMuzzle: d * 1.1, rBreech: d * 1.9, backLen: 0.05,
+      mat: steel, darkMat: dark, recuperators: false,
+    });
+    // Apagallamas en la boca.
+    const flash = this.tubeMesh(d * 2.2, d * 1.6, 0.06, dark, 12);
+    flash.position.y = barrelLen - 0.03;
+    this.recoiling.add(flash);
+    this.setupCasings(d, 3.4);
+  }
+
+  /**
+   * Ametralladora media (M240): bípode plegable bajo el cañón, cinta que entra
+   * por el lado, culata de madera y asa de cambio rápido de cañón. Va tumbada,
+   * a la altura de un codo — no sobre un trípode de metro y medio.
+   */
+  private buildBipodMg(d: number): void {
     const dark = this.mat(0x2b2f31, 0.55, 0.45);
     const steel = this.mat(0x40464a, 0.7, 0.35);
     const wood = this.mat(0x4a3a28, 0.15, 0.8);
+    const brass = this.mat(0x9a7a3a, 0.85, 0.3);
+
+    const hubZ = 0.42;
+    for (const sx of [-1, 1]) {
+      this.turret.add(this.strut(
+        new THREE.Vector3(sx * 0.02, 0.34, hubZ - 0.02),
+        new THREE.Vector3(sx * 0.26, 0.42, 0.02), 0.012, dark,
+      ));
+      const shoe = this.box(0.05, 0.09, 0.03, dark);
+      shoe.position.set(sx * 0.26, 0.42, 0.02);
+      this.turret.add(shoe);
+    }
+    const receiver = this.box(0.1, 0.5, 0.12, steel);
+    receiver.position.set(0, -0.08, 0);
+    const feedCover = this.box(0.11, 0.28, 0.04, dark);
+    feedCover.position.set(0, 0.02, 0.08);
+    const stock = this.box(0.075, 0.3, 0.11, wood);
+    stock.position.set(0, -0.44, -0.005);
+    const grip = this.box(0.05, 0.07, 0.13, dark);
+    grip.position.set(0, -0.26, -0.1);
+    grip.rotation.x = 16 * DEG;
+    this.cradle.add(receiver, feedCover, stock, grip);
+
+    const ammoBox = this.box(0.13, 0.2, 0.14, this.mat(0x3f4a35, 0.3, 0.7));
+    ammoBox.position.set(-0.13, -0.06, -0.09);
+    this.cradle.add(ammoBox);
+    for (let i = 0; i < 5; i++) {
+      const link = this.box(0.016, 0.014, 0.03, brass);
+      link.position.set(-0.11 + i * 0.02, -0.02, 0.02 + i * 0.005);
+      this.cradle.add(link);
+    }
+
+    const barrelLen = Math.max(0.42, d * 68);
+    this.installBarrel({
+      pivotY: 0.2, pivotZ: hubZ,
+      length: barrelLen, rMuzzle: d * 0.95, rBreech: d * 1.5, backLen: 0.05,
+      mat: steel, darkMat: dark, recuperators: false,
+    });
+    const handle = this.box(0.018, 0.12, 0.05, dark);
+    handle.position.set(0.035, barrelLen * 0.3, d * 2.2);
+    const flash = this.tubeMesh(d * 2.4, d * 1.4, 0.07, dark, 12);
+    flash.position.y = barrelLen - 0.035;
+    this.recoiling.add(handle, flash);
+    this.setupCasings(d, 3.6);
+  }
+
+  /**
+   * Ametralladora pesada (M2 Browning): trípode alto y arriostrado, receptor
+   * macizo, cañón pesado con manguito perforado y empuñaduras de pala con la
+   * mariposa del disparador entre ellas. Esta sí necesita trípode.
+   */
+  private buildTripodMg(d: number): void {
+    const dark = this.mat(0x2b2f31, 0.55, 0.45);
+    const steel = this.mat(0x40464a, 0.7, 0.35);
+    const brass = this.mat(0x9a7a3a, 0.85, 0.3);
 
     const hubZ = 1.0;
-    // Trípode: una pata delante y dos abiertas atrás, del cubo al suelo.
     const hubPos = new THREE.Vector3(0, 0, hubZ);
     for (const [fx, fy] of [[0, 0.72], [0.62, -0.5], [-0.62, -0.5]] as const) {
       const foot = new THREE.Vector3(fx, fy, 0.02);
-      this.turret.add(this.strut(hubPos, foot, 0.018, dark));
-      const shoe = this.box(0.09, 0.12, 0.04, dark);
+      this.turret.add(this.strut(hubPos, foot, 0.022, dark));
+      const shoe = this.box(0.1, 0.14, 0.045, dark);
       shoe.position.copy(foot);
       this.turret.add(shoe);
+      // Arriostrado a media altura: el trípode del .50 es aparatoso.
+      this.turret.add(this.strut(
+        new THREE.Vector3(0, 0, hubZ * 0.45),
+        new THREE.Vector3(fx * 0.45, fy * 0.45, hubZ * 0.16), 0.012, dark,
+      ));
     }
-    const hub = this.tubeMesh(0.07, 0.09, 0.1, dark, 12);
-    hub.rotation.x = Math.PI / 2; // eje vertical: es la rótula del trípode
+    const hub = this.tubeMesh(0.075, 0.095, 0.12, dark, 12);
+    hub.rotation.x = Math.PI / 2;
     hub.position.z = hubZ;
-    this.turret.add(hub);
+    const pintle = this.tubeMesh(0.05, 0.05, 0.16, steel, 10);
+    pintle.rotation.x = Math.PI / 2;
+    pintle.position.z = hubZ + 0.08;
+    this.turret.add(hub, pintle);
 
-    // Cajón de mecanismos + tapa + culata: solidarios a la cuna.
-    const receiver = this.box(0.14, 0.66, 0.16, steel);
-    receiver.position.set(0, -0.12, 0);
-    const cover = this.box(0.15, 0.4, 0.05, dark);
-    cover.position.set(0, 0.0, 0.1);
-    const stock = this.box(0.09, 0.26, 0.13, wood);
-    stock.position.set(0, -0.55, -0.02);
-    const grip = this.box(0.07, 0.09, 0.16, dark);
-    grip.position.set(0, -0.38, -0.13);
-    grip.rotation.x = -18 * DEG;
-    this.cradle.add(receiver, cover, stock, grip);
+    const receiver = this.box(0.16, 0.72, 0.19, steel);
+    receiver.position.set(0, -0.14, 0);
+    const cover = this.box(0.17, 0.42, 0.05, dark);
+    cover.position.set(0, -0.04, 0.12);
+    this.cradle.add(receiver, cover);
 
-    // Caja de munición + cinta que entra por el lado izquierdo.
-    const ammoBox = this.box(0.16, 0.24, 0.16, this.mat(0x3f4a35, 0.3, 0.7));
-    ammoBox.position.set(-0.17, -0.1, -0.1);
+    for (const sx of [-1, 1]) {
+      const spade = this.box(0.035, 0.05, 0.19, dark);
+      spade.position.set(sx * 0.11, -0.52, -0.04);
+      spade.rotation.x = 10 * DEG;
+      this.cradle.add(spade);
+    }
+    const butterfly = this.box(0.12, 0.03, 0.045, steel);
+    butterfly.position.set(0, -0.53, 0.0);
+    const backplate = this.box(0.2, 0.04, 0.2, dark);
+    backplate.position.set(0, -0.49, -0.01);
+    this.cradle.add(butterfly, backplate);
+
+    const ammoBox = this.box(0.18, 0.3, 0.19, this.mat(0x3f4a35, 0.3, 0.7));
+    ammoBox.position.set(0.2, -0.12, -0.12);
     this.cradle.add(ammoBox);
-    const belt = this.box(0.02, 0.02, 0.12, this.mat(0x9a7a3a, 0.8, 0.35));
-    belt.position.set(-0.1, -0.05, -0.02);
-    this.cradle.add(belt);
+    for (let i = 0; i < 6; i++) {
+      const link = this.box(0.022, 0.018, 0.045, brass);
+      link.position.set(0.16 - i * 0.022, -0.06, -0.02 + i * 0.012);
+      this.cradle.add(link);
+    }
 
-    // Alza y punto de mira.
-    const rearSight = this.box(0.05, 0.02, 0.07, dark);
-    rearSight.position.set(0, 0.06, 0.13);
-    this.cradle.add(rearSight);
-
-    const barrelLen = Math.max(0.5, d * 85);   // 12.7 mm -> ~1.1 m
+    const barrelLen = Math.max(0.5, d * 85);
     this.installBarrel({
-      pivotY: 0.18, pivotZ: hubZ,
+      pivotY: 0.2, pivotZ: hubZ,
       length: barrelLen,
-      rMuzzle: Math.max(0.011, d * 0.85),
-      rBreech: Math.max(0.016, d * 1.25),
-      backLen: 0.06,
-      mat: steel, darkMat: dark,
-      recuperators: false,
+      rMuzzle: Math.max(0.011, d * 0.85), rBreech: Math.max(0.016, d * 1.25),
+      backLen: 0.06, mat: steel, darkMat: dark, recuperators: false,
     });
-    // Manguito perforado del cañón (disipa el calor de las ráfagas).
     const shroud = this.tubeMesh(d * 1.5, d * 1.6, barrelLen * 0.42, dark, 14);
     shroud.position.y = barrelLen * 0.26;
     this.recoiling.add(shroud);
@@ -913,156 +1160,289 @@ export class GunModel {
       hole.position.y = barrelLen * (0.12 + 0.07 * i);
       this.recoiling.add(hole);
     }
-    // Punto de mira sobre la boca.
     const front = this.box(0.012, 0.012, 0.05, dark);
-    front.position.y = barrelLen * 0.9;
-    front.position.z = d * 1.6;
+    front.position.set(0, barrelLen * 0.92, d * 1.6);
     this.recoiling.add(front);
-
-    this.ejectsCasing = true;
-    this.casingSize = Math.max(0.02, d * 4.2);
-    this.hasBreechCycle = true;
-    const cs = this.casingSize;
-    this.casingGeo = new THREE.CylinderGeometry(cs * 0.34, cs * 0.4, cs, 10);
-    this.casingMat = this.mat(0xb98b3c, 0.9, 0.3);
-    this.disposables.push(this.casingGeo);
+    this.setupCasings(d, 4.2);
   }
 
   // -------------------------------------------------------------------------
-  //  Obuses
+  //  Obuses y cañones pesados
   // -------------------------------------------------------------------------
-  /** Obús: remolcado (M777/2S7 esquemático) o autopropulsado con torreta. */
-  private buildHowitzer(d: number, hasTurret: boolean): void {
-    const olive = this.mat(0x4a5240, 0.4, 0.6);
-    const gray = this.mat(0x565b58, 0.5, 0.5);
-    const dark = this.mat(0x2e3133, 0.5, 0.55);
-    const rubber = this.mat(0x1c1e20, 0.1, 0.95);
 
-    const hull = hasTurret ? this.group : this.turret; // torreta: el casco NO gira
-
-    if (hasTurret) {
-      // --- Autopropulsado de cadenas (M109A7) ------------------------------
-      const chassis = this.box(2.9, 6.1, 0.95, olive);
-      chassis.position.set(0, 0, 1.05);
-      // Glacis inclinado delante.
-      const glacis = this.box(2.9, 1.5, 0.7, olive);
-      glacis.position.set(0, 3.0, 1.15);
-      glacis.rotation.x = -28 * DEG;
-      hull.add(chassis, glacis);
-
-      for (const sx of [-1, 1]) {
-        const track = this.trackAssembly(5.8, 0.5, this.mat(0x3a3f42, 0.4, 0.7), gray);
-        track.position.set(sx * 1.5, 0, 0.6);
-        hull.add(track);
-        // Faldón lateral.
-        const skirt = this.box(0.08, 5.4, 0.45, olive);
-        skirt.position.set(sx * 1.62, 0, 1.28);
-        hull.add(skirt);
-      }
-
-      // Torreta: caja principal, techo estrechado, escotillas y ametralladora.
-      const turretBox = this.box(2.5, 3.0, 1.0, olive);
-      turretBox.position.set(0, -0.5, 2.0);
-      const turretTop = this.box(1.9, 2.2, 0.55, olive);
-      turretTop.position.set(0, -0.6, 2.75);
-      const bustle = this.box(2.2, 1.0, 0.8, olive); // cesta trasera de munición
-      bustle.position.set(0, -2.2, 2.1);
-      const hatch = this.disc([
-        [0, 0], [0.34, 0], [0.36, 0.06], [0.3, 0.1], [0, 0.11],
-      ], dark, 16);
-      hatch.position.set(-0.6, -1.0, 3.0);
-      const cupola = this.tubeMesh(0.42, 0.45, 0.3, olive, 16);
-      cupola.rotation.x = Math.PI / 2;
-      cupola.position.set(0.62, -1.0, 3.15);
-      const mg = this.tubeMesh(0.03, 0.04, 0.9, dark, 10);
-      mg.position.set(0.62, -0.6, 3.4);
-      mg.rotation.x = -8 * DEG;
-      this.turret.add(turretBox, turretTop, bustle, hatch, cupola, mg);
-      // Visor del jefe de pieza y antena.
-      const periscope = this.box(0.16, 0.1, 0.14, dark);
-      periscope.position.set(-0.6, -0.1, 3.06);
-      const antenna = this.tubeMesh(0.012, 0.018, 2.2, dark, 6);
-      antenna.rotation.x = Math.PI / 2 + 6 * DEG; // vertical, ligeramente caída
-      antenna.position.set(-1.0, -2.0, 3.6);
-      this.turret.add(periscope, antenna);
-    } else {
-      // --- Remolcado (M777 / 2S7 esquemático) ------------------------------
-      const chassis = this.box(1.5, 2.4, 0.5, gray);
-      chassis.position.set(0, 0.3, 0.95);
-      hull.add(chassis);
-      for (const sx of [-1, 1]) {
-        const w = this.wheel(0.62, 0.34, rubber, gray);
-        w.position.set(sx * 1.15, 0.55, 0.62);
-        hull.add(w);
-      }
-      // Mazas traseras abiertas + rejas clavadas + plataforma de tiro.
-      for (const side of [-1, 1]) {
-        const trail = this.box(0.2, 3.4, 0.26, gray);
-        trail.position.set(side * 0.85, -1.75, 0.55);
-        trail.rotation.z = side * -15 * DEG;
-        this.turret.add(trail);
-        const spade = this.box(0.4, 0.22, 0.62, dark);
-        spade.position.set(side * 1.28, -3.35, 0.3);
-        spade.rotation.x = 12 * DEG;
-        this.turret.add(spade);
-        // Gato de nivelación en cada maza.
-        const jack = this.tubeMesh(0.05, 0.05, 0.5, dark, 8);
-        jack.rotation.x = Math.PI / 2;
-        jack.position.set(side * 1.1, -2.6, 0.25);
-        this.turret.add(jack);
-      }
-      const platform = this.disc([
-        [0, 0], [0.78, 0], [0.82, 0.1], [0.6, 0.18], [0, 0.2],
-      ], dark, 24);
-      this.turret.add(platform);
-      // Asiento del apuntador y volantes de puntería (el M777 no lleva escudo).
-      for (const [sx, sy] of [[-1, 0.1], [1, 0.1]] as const) {
-        const handwheel = this.mesh(new THREE.TorusGeometry(0.22, 0.03, 6, 16), dark);
-        handwheel.rotation.y = Math.PI / 2;
-        handwheel.position.set(sx * 0.95, sy, 1.25);
-        this.turret.add(handwheel);
-      }
-      const seat = this.box(0.34, 0.32, 0.08, dark);
-      seat.position.set(-0.95, -0.5, 1.0);
-      this.turret.add(seat);
-    }
-
-    const L = d * 39; // L39: 155 mm -> ~6.05 m
+  /** Tubo L39 común a los obuses de 155: freno de boca, culata y atacador. */
+  private installHowitzerBarrel(
+    d: number, pivotY: number, pivotZ: number, gray: THREE.Material, dark: THREE.Material,
+    opts: { boreEvacuator?: boolean; calibers?: number } = {},
+  ): number {
+    const L = d * (opts.calibers ?? 39);
     this.installBarrel({
-      pivotY: hasTurret ? 0.55 : 0.35,
-      pivotZ: hasTurret ? 2.25 : 1.35,
-      length: L,
-      rMuzzle: d * 0.56, rBreech: d * 0.92,
-      backLen: L * 0.11,
+      pivotY, pivotZ, length: L,
+      rMuzzle: d * 0.56, rBreech: d * 0.92, backLen: L * 0.11,
       mat: gray, darkMat: dark,
       muzzleBrake: true,
-      boreEvacuator: hasTurret,
+      boreEvacuator: opts.boreEvacuator,
       breechBlock: true,
       rammer: true,
     });
-
     // Visor panorámico junto a la cuna (por donde apunta el artillero).
     const sight = this.box(0.14, 0.2, 0.3, dark);
     sight.position.set(-d * 2.6, L * 0.06, d * 1.4);
     this.cradle.add(sight);
+    return L;
+  }
+
+  /**
+   * Tren de rodaje completo de un vehículo de cadenas: orugas, faldones y
+   * glacis. Lo comparten el M109 (torreta) y el 2S7 (cañón al descubierto).
+   */
+  private buildTrackedHull(opts: {
+    hull: THREE.Object3D; width: number; length: number; deckZ: number;
+    olive: THREE.Material; dark: THREE.Material; gray: THREE.Material;
+    glacis?: boolean;
+  }): void {
+    const chassis = this.box(opts.width, opts.length, 0.95, opts.olive);
+    chassis.position.set(0, 0, opts.deckZ);
+    opts.hull.add(chassis);
+    if (opts.glacis !== false) {
+      const glacis = this.box(opts.width, 1.5, 0.7, opts.olive);
+      glacis.position.set(0, opts.length / 2 - 0.05, opts.deckZ + 0.1);
+      glacis.rotation.x = -28 * DEG;
+      opts.hull.add(glacis);
+    }
+    for (const sx of [-1, 1]) {
+      const track = this.trackAssembly(
+        opts.length * 0.95, 0.5, this.mat(0x3a3f42, 0.4, 0.7), opts.gray,
+      );
+      track.position.set(sx * (opts.width / 2 + 0.05), 0, 0.6);
+      opts.hull.add(track);
+      const skirt = this.box(0.08, opts.length * 0.9, 0.45, opts.olive);
+      skirt.position.set(sx * (opts.width / 2 + 0.17), 0, opts.deckZ + 0.23);
+      opts.hull.add(skirt);
+    }
+  }
+
+  /** Obús remolcado de mazas (M777): ruedas, plataforma y rejas clavadas. */
+  private buildTowedHowitzer(d: number): void {
+    const gray = this.mat(0x565b58, 0.5, 0.5);
+    const dark = this.mat(0x2e3133, 0.5, 0.55);
+    const rubber = this.mat(0x1c1e20, 0.1, 0.95);
+
+    const chassis = this.box(1.5, 2.4, 0.5, gray);
+    chassis.position.set(0, 0.3, 0.95);
+    this.turret.add(chassis);
+    for (const sx of [-1, 1]) {
+      const w = this.wheel(0.62, 0.34, rubber, gray);
+      w.position.set(sx * 1.15, 0.55, 0.62);
+      this.turret.add(w);
+    }
+    // Mazas traseras abiertas + rejas clavadas + plataforma de tiro.
+    for (const side of [-1, 1]) {
+      const trail = this.box(0.2, 3.4, 0.26, gray);
+      trail.position.set(side * 0.85, -1.75, 0.55);
+      trail.rotation.z = side * -15 * DEG;
+      this.turret.add(trail);
+      const spade = this.box(0.4, 0.22, 0.62, dark);
+      spade.position.set(side * 1.28, -3.35, 0.3);
+      spade.rotation.x = 12 * DEG;
+      this.turret.add(spade);
+      const jack = this.tubeMesh(0.05, 0.05, 0.5, dark, 8);
+      jack.rotation.x = Math.PI / 2;
+      jack.position.set(side * 1.1, -2.6, 0.25);
+      this.turret.add(jack);
+    }
+    const platform = this.disc([
+      [0, 0], [0.78, 0], [0.82, 0.1], [0.6, 0.18], [0, 0.2],
+    ], dark, 24);
+    this.turret.add(platform);
+    // Asiento del apuntador y volantes (el M777 no lleva escudo).
+    for (const sx of [-1, 1]) {
+      const handwheel = this.mesh(new THREE.TorusGeometry(0.22, 0.03, 6, 16), dark);
+      handwheel.rotation.y = Math.PI / 2;
+      handwheel.position.set(sx * 0.95, 0.1, 1.25);
+      this.turret.add(handwheel);
+    }
+    const seat = this.box(0.34, 0.32, 0.08, dark);
+    seat.position.set(-0.95, -0.5, 1.0);
+    this.turret.add(seat);
+
+    this.installHowitzerBarrel(d, 0.35, 1.35, gray, dark);
+  }
+
+  /** Autopropulsado de torreta cerrada (M109A7 Paladin). */
+  private buildTurretHowitzer(d: number): void {
+    const olive = this.mat(0x4a5240, 0.4, 0.6);
+    const gray = this.mat(0x565b58, 0.5, 0.5);
+    const dark = this.mat(0x2e3133, 0.5, 0.55);
+
+    // El casco NO gira con el azimut: solo la torreta.
+    this.buildTrackedHull({
+      hull: this.group, width: 2.9, length: 6.1, deckZ: 1.05,
+      olive, dark, gray,
+    });
+
+    const turretBox = this.box(2.5, 3.0, 1.0, olive);
+    turretBox.position.set(0, -0.5, 2.0);
+    const turretTop = this.box(1.9, 2.2, 0.55, olive);
+    turretTop.position.set(0, -0.6, 2.75);
+    const bustle = this.box(2.2, 1.0, 0.8, olive); // cesta trasera de munición
+    bustle.position.set(0, -2.2, 2.1);
+    const hatch = this.disc([
+      [0, 0], [0.34, 0], [0.36, 0.06], [0.3, 0.1], [0, 0.11],
+    ], dark, 16);
+    hatch.position.set(-0.6, -1.0, 3.0);
+    const cupola = this.tubeMesh(0.42, 0.45, 0.3, olive, 16);
+    cupola.rotation.x = Math.PI / 2;
+    cupola.position.set(0.62, -1.0, 3.15);
+    const mg = this.tubeMesh(0.03, 0.04, 0.9, dark, 10);
+    mg.position.set(0.62, -0.6, 3.4);
+    mg.rotation.x = -8 * DEG;
+    this.turret.add(turretBox, turretTop, bustle, hatch, cupola, mg);
+    const periscope = this.box(0.16, 0.1, 0.14, dark);
+    periscope.position.set(-0.6, -0.1, 3.06);
+    const antenna = this.tubeMesh(0.012, 0.018, 2.2, dark, 6);
+    antenna.rotation.x = Math.PI / 2 + 6 * DEG;
+    antenna.position.set(-1.0, -2.0, 3.6);
+    this.turret.add(periscope, antenna);
+
+    this.installHowitzerBarrel(d, 0.55, 2.25, gray, dark, { boreEvacuator: true });
+  }
+
+  /**
+   * Cañón pesado sobre cadenas y AL DESCUBIERTO (2S7 Pion): el tubo de 203 mm
+   * va montado sobre la cubierta trasera, sin torreta, y una pala hidráulica
+   * enorme se clava en el suelo detrás para aguantar el retroceso. La
+   * dotación viaja en la caseta delantera.
+   */
+  private buildOpenTrackedGun(d: number): void {
+    const olive = this.mat(0x53573f, 0.4, 0.65);
+    const gray = this.mat(0x5c605c, 0.5, 0.5);
+    const dark = this.mat(0x2b2e30, 0.5, 0.55);
+
+    this.buildTrackedHull({
+      hull: this.group, width: 3.2, length: 10.5, deckZ: 1.1,
+      olive, dark, gray, glacis: false,
+    });
+
+    // Caseta delantera de la dotación, con ventanillas.
+    const cab = this.box(3.0, 3.0, 1.15, olive);
+    cab.position.set(0, 3.4, 2.15);
+    const roof = this.box(2.4, 2.4, 0.25, olive);
+    roof.position.set(0, 3.4, 2.85);
+    this.group.add(cab, roof);
+    for (const sx of [-1, 1]) {
+      const win = this.box(0.06, 0.7, 0.42, this.mat(0x16323c, 0.2, 0.15));
+      win.position.set(sx * 1.52, 4.1, 2.35);
+      this.group.add(win);
+    }
+    // Cubierta trasera despejada donde se asienta la cureña.
+    const deck = this.box(2.6, 3.6, 0.3, gray);
+    deck.position.set(0, -2.6, 1.7);
+    this.group.add(deck);
+
+    // Pala hidráulica trasera clavada (lo que de verdad frena a un 203 mm).
+    const spade = this.box(2.6, 1.5, 0.28, dark);
+    spade.position.set(0, -5.55, 0.42);
+    spade.rotation.x = 42 * DEG;   // hoja mordiendo el suelo, no una pantalla
+    this.group.add(spade);
+    const spadeLip = this.box(2.6, 0.5, 0.22, dark);
+    spadeLip.position.set(0, -6.0, 0.03);
+    this.group.add(spadeLip);
+    for (const sx of [-1, 1]) {
+      this.group.add(this.strut(
+        new THREE.Vector3(sx * 1.0, -4.0, 1.7),
+        new THREE.Vector3(sx * 0.85, -5.3, 0.62), 0.13, dark,
+      ));
+    }
+
+    // Cureña abierta: dos montantes que sujetan los muñones, sin blindaje.
+    for (const sx of [-1, 1]) {
+      const post = this.box(0.3, 0.9, 1.3, gray);
+      post.position.set(sx * 0.95, -2.3, 2.5);
+      this.turret.add(post);
+    }
+    const ringMount = this.disc([
+      [0, 0], [1.35, 0], [1.4, 0.16], [1.1, 0.24], [0, 0.26],
+    ], gray, 24);
+    ringMount.position.set(0, -2.3, 1.85);
+    this.turret.add(ringMount);
+    // Asientos de los sirvientes a ambos lados del tubo.
+    for (const sx of [-1, 1]) {
+      const seat = this.box(0.34, 0.34, 0.08, dark);
+      seat.position.set(sx * 1.35, -2.9, 2.35);
+      this.turret.add(seat);
+    }
+
+    // L56 en 203 mm: el tubo es descomunal (~11 m), y sin freno de boca.
+    const L = d * 56;
+    this.installBarrel({
+      pivotY: -2.3, pivotZ: 3.15, length: L,
+      rMuzzle: d * 0.5, rBreech: d * 0.85, backLen: L * 0.1,
+      mat: gray, darkMat: dark,
+      muzzleBrake: false,
+      breechBlock: true,
+      rammer: true,
+    });
   }
 
   // -------------------------------------------------------------------------
   //  Lanzacohetes
   // -------------------------------------------------------------------------
-  /** Cohete: camión + pod de 6 tubos con los cohetes VISIBLES dentro. */
-  private buildRocket(d: number): void {
+
+  /**
+   * Pod de 6 tubos con los cohetes VISIBLES asomando (desaparecen al salir).
+   * `slot` desplaza el pod a un lado para montar dos, como en el M270.
+   */
+  private buildRocketPod(d: number, podLen: number, slotX: number): void {
+    const olive = this.mat(0x49523f, 0.35, 0.65);
+    const dark = this.mat(0x2e3133, 0.5, 0.55);
+    const nose = this.mat(0x6b3025, 0.3, 0.7);
+    const skin = this.mat(0x8d9285, 0.5, 0.5);
+
+    // Marco ABIERTO (cuatro largueros + dos cuadernas): una caja maciza tapaba
+    // los tubos y el pod parecía un ladrillo.
+    for (const [ex, ez] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      const rail = this.box(0.1, podLen * 0.92, 0.1, olive);
+      rail.position.set(slotX + ex * 0.56, podLen / 2 - 0.8, ez * 0.88);
+      this.recoiling.add(rail);
+    }
+    for (const fy of [0.06, 0.92]) {
+      const frame = this.box(1.16, 0.12, 1.82, olive);
+      frame.position.set(slotX, podLen * fy - 0.8, 0);
+      this.recoiling.add(frame);
+    }
+    for (let i = 0; i < 6; i++) {
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = slotX + (col - 0.5) * 0.52, z = (row - 1) * 0.58;
+      const tube = this.tubeMesh(d * 1.25, d * 1.25, podLen * 0.95, dark, 14);
+      tube.position.set(x, podLen / 2 - 0.8, z);
+      this.recoiling.add(tube);
+      const rk = new THREE.Group();
+      const bodyMesh = this.tubeMesh(d * 0.95, d * 0.95, 0.55, skin, 12);
+      const tip = this.mesh(new THREE.ConeGeometry(d * 0.95, 0.45, 12), nose);
+      tip.position.y = 0.5;
+      rk.add(bodyMesh, tip);
+      rk.position.set(x, podLen - 1.1, z);
+      this.recoiling.add(rk);
+      this.ammoVisuals.push(rk);
+    }
+  }
+
+  /**
+   * HIMARS: camión 6×6 de cabina blindada con UN solo pod. Es la mitad de un
+   * M270 sobre ruedas — más ligero y aerotransportable, y así se ve.
+   * Con `pods = 2` monta contenedores en vez de tubos (ER GMLRS / PrSM).
+   */
+  private buildRocketTruck(d: number, pods: number): void {
     const olive = this.mat(0x49523f, 0.35, 0.65);
     const dark = this.mat(0x2e3133, 0.5, 0.55);
     const rubber = this.mat(0x1a1c1e, 0.1, 0.95);
     const glass = this.mat(0x16323c, 0.2, 0.15);
     const cabMat = this.mat(0x3c4437, 0.35, 0.6);
-    const nose = this.mat(0x6b3025, 0.3, 0.7);
 
     const bed = this.box(2.5, 7.0, 0.7, olive);
     bed.position.set(0, 0, 1.15);
     this.group.add(bed);
-    // Cabina blindada con ventanillas y parachoques.
     const cab = this.box(2.3, 1.9, 1.6, cabMat);
     cab.position.set(0, 2.9, 2.2);
     const windshield = this.box(2.0, 0.08, 0.7, glass);
@@ -1071,16 +1451,14 @@ export class GunModel {
     const bumper = this.box(2.4, 0.25, 0.3, dark);
     bumper.position.set(0, 4.05, 1.35);
     this.group.add(cab, windshield, bumper);
-
+    // Ruedas 6×6 (tres ejes: es lo que distingue al HIMARS del M270).
     for (const sx of [-1, 1]) {
-      for (const wy of [-2.6, -1.4, 1.6, 2.9]) {
+      for (const wy of [-2.6, -1.3, 2.9]) {
         const w = this.wheel(0.62, 0.42, rubber, dark);
         w.position.set(sx * 1.3, wy, 0.62);
         this.group.add(w);
       }
     }
-
-    // Gatos estabilizadores traseros: el camión no dispara sobre la suspensión.
     for (const sx of [-1, 1]) {
       const jack = this.tubeMesh(0.09, 0.09, 1.1, dark, 10);
       jack.rotation.x = Math.PI / 2;
@@ -1090,33 +1468,82 @@ export class GunModel {
       this.group.add(jack, foot);
     }
 
-    // Caja lanzadora: 6 tubos reales con su cohete dentro.
     const podLen = Math.max(4.2, d * 18);
-    const frame = this.box(2.4, podLen * 0.92, 1.8, olive);
-    frame.position.y = podLen / 2 - 0.8;
-    this.recoiling.add(frame);
-    for (let i = 0; i < 6; i++) {
-      const col = i % 3, row = Math.floor(i / 3);
-      const x = (col - 1) * 0.74, z = (row - 0.5) * 0.82;
-      const tube = this.tubeMesh(d * 1.25, d * 1.25, podLen * 0.95, dark, 14);
-      tube.position.set(x, podLen / 2 - 0.8, z);
-      this.recoiling.add(tube);
-      // Cohete visible en la boca (desaparece al dispararse).
-      const rk = new THREE.Group();
-      const bodyMesh = this.tubeMesh(d * 0.95, d * 0.95, 0.55, this.mat(0x8d9285, 0.5, 0.5), 12);
-      const tip = this.mesh(new THREE.ConeGeometry(d * 0.95, 0.45, 12), nose);
-      tip.position.y = 0.5;
-      rk.add(bodyMesh, tip);
-      rk.position.set(x, podLen - 1.1, z);
-      this.recoiling.add(rk);
-      this.ammoVisuals.push(rk);
-    }
+    if (pods >= 2) this.buildContainerPods(d, podLen, 2);
+    else this.buildRocketPod(d, podLen, 0);
     this.tubesLoaded = this.ammoVisuals.length;
     this.installBarrelless({ pivotY: -1.4, pivotZ: 1.95, muzzleY: podLen - 0.8 });
   }
 
-  /** Misil: TEL con canister único grande y tapa que salta al disparar. */
-  private buildMissile(d: number): void {
+  /**
+   * M270 MLRS: casco de CADENAS (derivado del Bradley) con DOS pods de seis.
+   * Doce cohetes en el aire frente a los seis del HIMARS.
+   */
+  private buildRocketTracked(d: number, pods: number): void {
+    const olive = this.mat(0x49523f, 0.35, 0.65);
+    const gray = this.mat(0x565b58, 0.5, 0.5);
+    const dark = this.mat(0x2e3133, 0.5, 0.55);
+    const glass = this.mat(0x16323c, 0.2, 0.15);
+
+    this.buildTrackedHull({
+      hull: this.group, width: 2.9, length: 6.6, deckZ: 1.0,
+      olive, dark, gray, glacis: false,
+    });
+    // Cabina blindada delantera con parabrisas de rejilla.
+    const cab = this.box(2.7, 2.1, 1.35, olive);
+    cab.position.set(0, 2.3, 2.15);
+    const slope = this.box(2.7, 0.9, 0.7, olive);
+    slope.position.set(0, 3.35, 2.0);
+    slope.rotation.x = -32 * DEG;
+    const windshield = this.box(2.2, 0.08, 0.55, glass);
+    windshield.position.set(0, 3.3, 2.35);
+    windshield.rotation.x = -32 * DEG;
+    this.group.add(cab, slope, windshield);
+
+    // Estructura basculante que sostiene los dos pods.
+    const cage = this.box(2.9, 0.45, 2.0, gray);
+    cage.position.set(0, -0.55, 0);
+    this.recoiling.add(cage);
+
+    const podLen = Math.max(4.2, d * 18);
+    const n = Math.max(1, pods);
+    for (let i = 0; i < n; i++) {
+      this.buildRocketPod(d, podLen, (i - (n - 1) / 2) * 1.32);
+    }
+    this.tubesLoaded = this.ammoVisuals.length;
+    this.installBarrelless({ pivotY: -2.0, pivotZ: 2.1, muzzleY: podLen - 0.8 });
+  }
+
+  /** Contenedores sellados (ER GMLRS / PrSM): no se ven tubos, solo cajas. */
+  private buildContainerPods(d: number, podLen: number, count: number): void {
+    const olive = this.mat(0x4d5346, 0.35, 0.65);
+    const dark = this.mat(0x2e3133, 0.5, 0.55);
+    const w = Math.max(0.9, d * 4.6);   // el contenedor abraza al cohete
+    const h = Math.max(1.3, d * 6.2);
+    for (let i = 0; i < count; i++) {
+      const x = (i - (count - 1) / 2) * (w * 1.1);
+      const shell = this.box(w, podLen * 0.95, h, olive);
+      shell.position.set(x, podLen / 2 - 0.8, 0);
+      this.recoiling.add(shell);
+      // Nervios de refuerzo del contenedor.
+      for (let k = 0; k < 4; k++) {
+        const rib = this.box(w * 1.07, 0.1, h * 1.04, dark);
+        rib.position.set(x, podLen * (0.12 + 0.24 * k) - 0.6, 0);
+        this.recoiling.add(rib);
+      }
+      // Tapa frangible que salta al disparar.
+      const lid = this.box(w * 0.95, 0.08, h * 0.96, dark);
+      lid.position.set(x, podLen - 0.85, 0);
+      this.recoiling.add(lid);
+      this.ammoVisuals.push(lid);
+    }
+  }
+
+  /**
+   * TEL de misiles: camión 10×10 con uno o DOS canisters. El ATACMS va solo;
+   * el PrSM es más esbelto y caben dos por pod, que es justo su argumento.
+   */
+  private buildMissileTel(d: number, pods: number): void {
     const olive = this.mat(0x4d5346, 0.35, 0.65);
     const dark = this.mat(0x2e3133, 0.5, 0.55);
     const rubber = this.mat(0x1a1c1e, 0.1, 0.95);
@@ -1148,33 +1575,35 @@ export class GunModel {
       this.group.add(jack, foot);
     }
 
-    // Canister: cuerpo, refuerzos anulares y tapa frangible.
     const canLen = Math.max(6.5, d * 11);
-    const r = Math.max(0.55, d * 0.95);
-    const canister = this.tubeMesh(r, r, canLen, olive, 20);
-    canister.position.y = canLen / 2 - 1.2;
-    this.recoiling.add(canister);
-    for (let i = 0; i < 4; i++) {
-      const band = this.mesh(new THREE.TorusGeometry(r * 1.02, r * 0.07, 6, 20), dark);
-      band.rotation.x = Math.PI / 2;
-      band.position.y = -1.2 + canLen * (0.15 + 0.23 * i);
-      this.recoiling.add(band);
+    const n = Math.max(1, pods);
+    const r = Math.max(0.42, d * 0.95);
+    for (let i = 0; i < n; i++) {
+      const x = (i - (n - 1) / 2) * (r * 2.3);
+      const canister = this.tubeMesh(r, r, canLen, olive, 20);
+      canister.position.set(x, canLen / 2 - 1.2, 0);
+      this.recoiling.add(canister);
+      for (let k = 0; k < 4; k++) {
+        const band = this.mesh(new THREE.TorusGeometry(r * 1.02, r * 0.07, 6, 20), dark);
+        band.rotation.x = Math.PI / 2;
+        band.position.set(x, -1.2 + canLen * (0.15 + 0.23 * k), 0);
+        this.recoiling.add(band);
+      }
+      const lid = this.lathe([
+        [0, 0], [r * 1.05, 0], [r * 1.05, 0.12], [r * 0.6, 0.2], [0, 0.22],
+      ], dark, 20);
+      lid.position.set(x, canLen - 1.2, 0);
+      this.recoiling.add(lid);
+      this.ammoVisuals.push(lid);
     }
-    // Tapa frangible: cierra la boca del canister (eje = eje del tubo, +y).
-    const lid = this.lathe([
-      [0, 0], [r * 1.05, 0], [r * 1.05, 0.12], [r * 0.6, 0.2], [0, 0.22],
-    ], dark, 20);
-    lid.position.y = canLen - 1.2;
-    this.recoiling.add(lid);
-    // La tapa entra en el mismo ciclo que la munición del pod: salta al
-    // disparar y vuelve (canister recargado) cuando pasa el tiempo de recarga.
-    this.ammoVisuals.push(lid);
-    this.tubesLoaded = 1;
-    // Cuna basculante con el cilindro de elevación.
+    // Bastidor que abraza los canisters y cilindro de elevación.
+    const cradleFrame = this.box(r * 2.5 * n, 1.0, r * 0.5, dark);
+    cradleFrame.position.set(0, canLen * 0.2, -r * 1.15);
     const ram = this.tubeMesh(0.16, 0.2, canLen * 0.4, dark, 12);
-    ram.position.set(0, canLen * 0.1, -r * 1.3);
-    this.cradle.add(ram);
+    ram.position.set(0, canLen * 0.1, -r * 1.5);
+    this.cradle.add(cradleFrame, ram);
 
+    this.tubesLoaded = this.ammoVisuals.length;
     this.installBarrelless({ pivotY: -2.2, pivotZ: 2.0, muzzleY: canLen - 1.2 });
   }
 

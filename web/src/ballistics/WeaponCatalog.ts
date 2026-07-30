@@ -29,9 +29,32 @@ export interface ChargeZone {
   muzzleVelocity: number; // m/s
 }
 
+/**
+ * Cómo va montada el arma. Es un dato real del sistema (no afecta a la
+ * trayectoria) y es lo que permite distinguir piezas de la misma categoría:
+ * un M270 va sobre cadenas y un HIMARS sobre ruedas; una pistola se sostiene
+ * a mano y una M2 vive sobre un trípode. La capa de render lo usa para elegir
+ * la silueta; el solver lo ignora por completo.
+ */
+export type WeaponMount =
+  | 'handheld'         // pistola, fusil: lo sostiene un tirador
+  | 'bipod'            // ametralladora media apoyada en su bípode
+  | 'tripod'           // ametralladora pesada sobre trípode
+  | 'baseplate'        // mortero: placa base + bípode
+  | 'towed'            // obús remolcado de mazas (M777)
+  | 'trackedTurret'    // autopropulsado con torreta cerrada (M109)
+  | 'trackedOpen'      // cañón pesado sobre cadenas, al descubierto (2S7)
+  | 'wheeledLauncher'  // lanzacohetes sobre camión (HIMARS)
+  | 'trackedLauncher'  // lanzacohetes sobre cadenas, dos pods (M270)
+  | 'tel';             // transporte-erector-lanzador de misiles
+
 export class Weapon {
   name = '';
   category: 'Mortar' | 'Howitzer' | 'Rocket' | 'Missile' | 'SmallArms' = 'Howitzer';
+  /** Montaje real del sistema; solo lo consume la capa de render. */
+  mount: WeaponMount = 'towed';
+  /** Nº de contenedores/pods del lanzador (2 pods en el M270, 2 PrSM por pod). */
+  launcherPods = 1;
   minElevationDeg = 0.0;
   maxElevationDeg = 70.0;
   traverseDeg = 360.0;
@@ -128,6 +151,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = '120mm Heavy Mortar';
     w.category = 'Mortar';
+    w.mount = 'baseplate';
     w.minElevationDeg = 45.0; // mortars are high-angle weapons
     w.maxElevationDeg = 85.0;
     w.traverseDeg = 12.0;
@@ -171,6 +195,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'M777 155mm Howitzer';
     w.category = 'Howitzer';
+    w.mount = 'towed';
     w.minElevationDeg = 0.0;
     w.maxElevationDeg = 71.7;
     w.traverseDeg = 45.0;
@@ -220,6 +245,8 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'HIMARS / GMLRS';
     w.category = 'Rocket';
+    w.mount = 'wheeledLauncher';
+    w.launcherPods = 1;
     w.minElevationDeg = 25.0;
     w.maxElevationDeg = 60.0;
     w.traverseDeg = 360.0;
@@ -269,6 +296,8 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'Tactical Ballistic Missile';
     w.category = 'Missile';
+    w.mount = 'tel';
+    w.launcherPods = 1;
     w.minElevationDeg = 30.0;
     w.maxElevationDeg = 80.0;
     w.traverseDeg = 360.0;
@@ -303,6 +332,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'M109A7 Paladin 155mm';
     w.category = 'Howitzer';
+    w.mount = 'trackedTurret';
     w.minElevationDeg = 0.0;
     w.maxElevationDeg = 75.0;
     w.traverseDeg = 360.0; // torreta
@@ -337,6 +367,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = '2S7 Pion 203mm';
     w.category = 'Howitzer';
+    w.mount = 'trackedOpen';
     w.minElevationDeg = 0.0;
     w.maxElevationDeg = 60.0;
     w.traverseDeg = 30.0;
@@ -372,6 +403,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'M982 Excalibur (155mm L39)';
     w.category = 'Howitzer';
+    w.mount = 'towed';
     w.minElevationDeg = 15.0;
     w.maxElevationDeg = 70.0;
     w.traverseDeg = 45.0;
@@ -402,6 +434,8 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'M270 / M26 MLRS';
     w.category = 'Rocket';
+    w.mount = 'trackedLauncher';
+    w.launcherPods = 2;
     w.minElevationDeg = 25.0;
     w.maxElevationDeg = 60.0;
     w.traverseDeg = 360.0;
@@ -433,6 +467,8 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'HIMARS / ER GMLRS';
     w.category = 'Rocket';
+    w.mount = 'wheeledLauncher';
+    w.launcherPods = 2;
     w.minElevationDeg = 25.0;
     w.maxElevationDeg = 60.0;
     w.traverseDeg = 360.0;
@@ -465,6 +501,8 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = 'PrSM (clase)';
     w.category = 'Missile';
+    w.mount = 'tel';
+    w.launcherPods = 2;
     w.minElevationDeg = 30.0;
     w.maxElevationDeg = 80.0;
     w.traverseDeg = 360.0;
@@ -487,7 +525,7 @@ export class WeaponCatalog {
   private static smallArm(opts: {
     name: string; roundName: string; massKg: number; diameterM: number;
     v0: number; dragModel: 'G1' | 'G7'; bc: number; twistCalibers: number;
-    maxElevationDeg: number; reloadTime: number;
+    maxElevationDeg: number; reloadTime: number; mount: WeaponMount;
   }): Weapon {
     const m = new Munition();
     m.name = opts.roundName;
@@ -504,6 +542,7 @@ export class WeaponCatalog {
     const w = new Weapon();
     w.name = opts.name;
     w.category = 'SmallArms';
+    w.mount = opts.mount;
     w.minElevationDeg = 0.0;
     w.maxElevationDeg = opts.maxElevationDeg;
     w.traverseDeg = 360.0;
@@ -520,7 +559,7 @@ export class WeaponCatalog {
       massKg: 0.00804, diameterM: 0.00901, v0: 360,
       dragModel: 'G1', bc: 0.145,
       twistCalibers: 28, // 1:10" en calibre .355
-      maxElevationDeg: 45, reloadTime: 0.5,
+      maxElevationDeg: 45, reloadTime: 0.5, mount: 'handheld',
     });
   }
 
@@ -531,7 +570,7 @@ export class WeaponCatalog {
       massKg: 0.00402, diameterM: 0.0057, v0: 920,
       dragModel: 'G7', bc: 0.151,
       twistCalibers: 31, // 1:7" en calibre .224
-      maxElevationDeg: 50, reloadTime: 0.15,
+      maxElevationDeg: 50, reloadTime: 0.15, mount: 'handheld',
     });
   }
 
@@ -542,7 +581,7 @@ export class WeaponCatalog {
       massKg: 0.00952, diameterM: 0.00782, v0: 850,
       dragModel: 'G7', bc: 0.195,
       twistCalibers: 39, // 1:12" en calibre .308
-      maxElevationDeg: 60, reloadTime: 0.12,
+      maxElevationDeg: 60, reloadTime: 0.12, mount: 'bipod',
     });
   }
 
@@ -553,7 +592,7 @@ export class WeaponCatalog {
       massKg: 0.0429, diameterM: 0.01295, v0: 890,
       dragModel: 'G7', bc: 0.35,
       twistCalibers: 29, // 1:15" en calibre .510
-      maxElevationDeg: 60, reloadTime: 0.12,
+      maxElevationDeg: 60, reloadTime: 0.12, mount: 'tripod',
     });
   }
 

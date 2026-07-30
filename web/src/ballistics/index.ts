@@ -9,7 +9,7 @@ export { BallisticsSolver, SolverConfig } from './BallisticsSolver';
 export type { FlightResult, TrajectorySample } from './BallisticsSolver';
 export { WGS84, EnuFrame, geodeticToEcef, somiglianaGravity } from './Geodesy';
 export { Weapon, WeaponCatalog } from './WeaponCatalog';
-export type { WeaponId, CatalogVariant, ChargeZone } from './WeaponCatalog';
+export type { WeaponId, CatalogVariant, ChargeZone, WeaponMount } from './WeaponCatalog';
 export { WeaponSystem, defaultFireOrder, v0Factor, V0_TEMP_COEFF_PER_C } from './WeaponSystem';
 export type {
   FireOrder, SolveResult, DispersionErrors, DispersionResult, DispersionPrediction, MrsiRound,
