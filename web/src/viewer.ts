@@ -14,6 +14,21 @@
 //  calcula contra el terreno, no contra los tejados). Clave inválida o cuota
 //  agotada degradan con un aviso al modo actual. La atribución de Google
 //  llega dentro de los créditos del tileset y Cesium la muestra en el pie.
+//
+//  V2 VFX — "look" cinematográfico de la escena (applySceneLook):
+//    * resolución nítida en HiDPI (useBrowserRecommendedResolution:false; la
+//      escala la fija render/quality.ts por nivel), MSAA/FXAA/HDR por nivel;
+//    * niebla de altura con densidad VISUAL realista: a 15-30 km el relieve
+//      se funde con la calima como en una foto real (Cesium por defecto casi
+//      no aplica bruma a distancias de artillería);
+//    * atmósfera del cielo por fragmento, dispersión de Mie algo más alta
+//      (aerosoles de baja cota) y luz dinámica del SOL (el cielo nocturno se
+//      queda oscuro aunque el terreno lo ilumine la luna: SceneLighting);
+//    * luna y estrellas visibles, color base del globo terroso (no azul) para
+//      las teselas aún sin cargar, carga de teselas hermanas (menos huecos al
+//      girar la cámara).
+//  El sombreado sol/luna dinámico (cambio de scene.light por la noche) vive
+//  en render/SceneLighting.ts; los niveles de calidad, en render/quality.ts.
 // ============================================================================
 import * as Cesium from 'cesium';
 
@@ -28,7 +43,12 @@ export async function createViewer(containerId: string): Promise<Cesium.Viewer> 
   let worldTerrain: Cesium.CesiumTerrainProvider | null = null;
   if (hasToken) {
     try {
-      worldTerrain = await Cesium.createWorldTerrainAsync({ requestWaterMask: true });
+      worldTerrain = await Cesium.createWorldTerrainAsync({
+        requestWaterMask: true,
+        // Normales por vértice: sombreado de laderas con el sol real (sin
+        // ellas el relieve se ve plano salvo por la imaginería).
+        requestVertexNormals: true,
+      });
     } catch (err) {
       console.warn('[UnaiArtillery] Cesium World Terrain no disponible — sigo sin relieve', err);
     }
@@ -57,12 +77,25 @@ export async function createViewer(containerId: string): Promise<Cesium.Viewer> 
     fullscreenButton: false,
     infoBox: false,
     selectionIndicator: false,
+    // V2 — HiDPI nítido: la resolución la decide quality.ts (dpr acotado ×
+    // escala del nivel × adaptativo), no el "recomendado" del navegador.
+    useBrowserRecommendedResolution: false,
+    // MSAA inicial (quality.ts lo reajusta por nivel en caliente).
+    msaaSamples: 4,
+    // Las sombras las enciende quality.ts en Alta/Ultra.
+    shadows: false,
+    contextOptions: {
+      webgl: {
+        alpha: false,
+        // El antialias lo hace Cesium (MSAA en sus FBO + FXAA): el del
+        // framebuffer por defecto solo gastaría memoria.
+        antialias: false,
+        powerPreference: 'high-performance',
+      },
+    },
   });
 
-  // Que los marcadores/trayectorias se oculten detrás del relieve.
-  viewer.scene.globe.depthTestAgainstTerrain = true;
-  // El sol ilumina el terreno según la hora real: más drama en los tiros.
-  viewer.scene.globe.enableLighting = true;
+  applySceneLook(viewer);
 
   if (!hasToken) {
     console.warn(
@@ -71,6 +104,61 @@ export async function createViewer(containerId: string): Promise<Cesium.Viewer> 
     );
   }
   return viewer;
+}
+
+/**
+ * Ajustes de "look" independientes del nivel de calidad: atmósfera, bruma,
+ * astros y globo. Idempotente (se puede reaplicar).
+ */
+export function applySceneLook(viewer: Cesium.Viewer): void {
+  const scene = viewer.scene;
+  const globe = scene.globe;
+
+  // Que los marcadores/trayectorias se oculten detrás del relieve.
+  globe.depthTestAgainstTerrain = true;
+  // El sol ilumina el terreno según la hora real: más drama en los tiros.
+  globe.enableLighting = true;
+  // Atmósfera de suelo iluminada por el SOL aunque la luz de la escena sea la
+  // luna (SceneLighting): de noche el cielo y la calima se quedan oscuros.
+  globe.dynamicAtmosphereLighting = true;
+  globe.dynamicAtmosphereLightingFromSun = true;
+  globe.showGroundAtmosphere = true;
+  // Aerosoles de baja cota: un poco más de Mie = calima cálida y realista.
+  globe.atmosphereMieCoefficient = new Cesium.Cartesian3(28e-6, 28e-6, 28e-6);
+  // Laderas en sombra más profundas (relieve legible con sol bajo) sin que la
+  // cara oculta se vuelva negra.
+  globe.lambertDiffuseMultiplier = 1.05;
+  globe.vertexShadowDarkness = 0.22;
+  // Teselas aún sin cargar: tono tierra (no el azul por defecto) y menos
+  // huecos al girar la cámara.
+  globe.baseColor = Cesium.Color.fromCssColorString('#3a3a31');
+  globe.preloadSiblings = true;
+
+  // Bruma de distancia: la densidad física de Cesium casi no se ve a 10-30
+  // km; la VISUAL se sube para la perspectiva aérea de una foto real (la
+  // física de la niebla —culling de teselas— no cambia).
+  scene.fog.enabled = true;
+  scene.fog.visualDensityScalar = 0.9;
+  scene.fog.minimumBrightness = 0.035;
+
+  // Cielo: atmósfera por fragmento (degradado limpio, sin bandas de
+  // vértice) y Mie a juego con la del suelo.
+  if (scene.skyAtmosphere) {
+    scene.skyAtmosphere.show = true;
+    scene.skyAtmosphere.perFragmentAtmosphere = true;
+    scene.skyAtmosphere.atmosphereMieCoefficient = new Cesium.Cartesian3(28e-6, 28e-6, 28e-6);
+  }
+  // Astros: sol con halo, luna y estrellas (la luna real a veces se ve de día).
+  if (scene.sun) {
+    scene.sun.show = true;
+    scene.sun.glowFactor = 1.4;
+  }
+  if (scene.moon) scene.moon.show = true;
+  if (scene.skyBox) scene.skyBox.show = true;
+
+  // HDR (si quality.ts lo enciende): tone mapping PBR neutro + exposición.
+  scene.postProcessStages.tonemapper = Cesium.Tonemapper.PBR_NEUTRAL;
+  scene.postProcessStages.exposure = 1.15;
 }
 
 // ---------------------------------------------------------------------------

@@ -79,3 +79,59 @@ export function whistleParams(
   const m = Math.min(1, Math.max(0, (mach - 0.3) / 0.7));
   return { gain, freqHz: 600 + 600 * m };
 }
+
+// ---------------------------------------------------------------------------
+//  V2 VFX — Propagación realista: absorción del aire, reverberación por
+//  distancia y onda N del chasquido supersónico.
+// ---------------------------------------------------------------------------
+
+/**
+ * Corte del paso-bajo por ABSORCIÓN ATMOSFÉRICA (Hz). La absorción crece
+ * con f² (ISO 9613-1: ~5 dB/km a 1 kHz, ~30 dB/km a 4 kHz): de cerca se oye
+ * el chasquido agudo; a kilómetros solo llega el retumbo grave. Monótona
+ * decreciente: ~10 kHz a 100 m, ~1.7 kHz a 1 km, ~430 Hz a 5 km, ~260 Hz a
+ * 15 km, con suelo de 200 Hz.
+ */
+export function airAbsorptionCutoffHz(distanceM: number): number {
+  const d = Math.max(0, distanceM);
+  return 200 + 16000 / (1 + Math.pow(d / 150, 1.2));
+}
+
+/**
+ * Fracción de señal enviada a la reverberación (0..1): de cerca domina el
+ * directo; lejos, el eco del valle y el retumbo (campo difuso) — un cañonazo
+ * a 5 km es casi todo cola.
+ */
+export function reverbSend(distanceM: number): number {
+  const d = Math.max(0, distanceM);
+  return Math.min(0.85, 0.12 + 0.62 * (1 - Math.exp(-d / 2500)));
+}
+
+/**
+ * Duración (s) de la onda N del chasquido supersónico (Whitham, forma de
+ * Stoughton 1997): T = 1.82·M·b^¼·d / (c·(M²−1)^⅜·l^¼), con b la distancia
+ * de paso, d el calibre y l ≈ 4.5 calibres. Bala de 7.62 a 50 m y Mach 2.5:
+ * ~0.35 ms; granada de 155 mm a 300 m y Mach 2: ~5 ms. Acotada a [0.1, 12] ms.
+ */
+export function nWaveDurationS(
+  missDistanceM: number, caliberM: number, mach: number, soundSpeedMS = 340,
+): number {
+  const M = Math.max(1.01, mach);
+  const b = Math.max(1, missDistanceM);
+  const d = Math.max(0.004, caliberM);
+  const l = 4.5 * d;
+  const t = (1.82 * M * Math.pow(b, 0.25) * d) /
+    (Math.max(200, soundSpeedMS) * Math.pow(M * M - 1, 0.375) * Math.pow(l, 0.25));
+  return Math.min(0.012, Math.max(0.0001, t));
+}
+
+/**
+ * Ganancia relativa (0..1) del chasquido: la sobrepresión pico cae con
+ * b^(−¾) y crece con el calibre; ~0.9 para una bala de 7.62 mm a 10 m,
+ * saturada a 1.
+ */
+export function nWaveGain(missDistanceM: number, caliberM: number): number {
+  const b = Math.max(1, missDistanceM);
+  const p = (Math.max(0.004, caliberM) / 0.00762) * Math.pow(10 / b, 0.75);
+  return Math.min(1, 0.9 * Math.pow(p, 0.6));
+}

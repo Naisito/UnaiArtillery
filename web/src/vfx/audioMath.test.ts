@@ -3,8 +3,52 @@
 // ============================================================================
 import { describe, expect, it } from 'vitest';
 import {
-  azimuthDegOf, boomDelayS, distanceGain, panFromAzimuths, whistleParams,
+  airAbsorptionCutoffHz, azimuthDegOf, boomDelayS, distanceGain, nWaveDurationS, nWaveGain,
+  panFromAzimuths, reverbSend, whistleParams,
 } from './audioMath';
+
+// ============================================================================
+//  V2 VFX — propagación: absorción, reverberación y onda N.
+// ============================================================================
+describe('V2 — audioMath (absorción, reverberación, onda N)', () => {
+  it('la absorción del aire cierra el paso-bajo con la distancia (monótona)', () => {
+    const near = airAbsorptionCutoffHz(50);
+    const km = airAbsorptionCutoffHz(1000);
+    const far = airAbsorptionCutoffHz(5000);
+    const vfar = airAbsorptionCutoffHz(20000);
+    expect(near).toBeGreaterThan(8000);
+    expect(km).toBeGreaterThan(1000);
+    expect(km).toBeLessThan(2500);
+    expect(far).toBeLessThan(600);
+    expect(vfar).toBeGreaterThanOrEqual(200);
+    expect(near).toBeGreaterThan(km);
+    expect(km).toBeGreaterThan(far);
+    expect(far).toBeGreaterThan(vfar);
+  });
+
+  it('la reverberación gana peso lejos y está acotada', () => {
+    expect(reverbSend(0)).toBeCloseTo(0.12, 6);
+    expect(reverbSend(5000)).toBeGreaterThan(reverbSend(500));
+    expect(reverbSend(1e6)).toBeLessThanOrEqual(0.85);
+  });
+
+  it('onda N: ~0.35 ms para una bala, varios ms para una granada', () => {
+    const bullet = nWaveDurationS(50, 0.00762, 2.5, 343);
+    expect(bullet).toBeGreaterThan(0.0002);
+    expect(bullet).toBeLessThan(0.0006);
+    const shell = nWaveDurationS(300, 0.155, 2.0, 343);
+    expect(shell).toBeGreaterThan(0.003);
+    expect(shell).toBeLessThan(0.008);
+    // Más lejos = onda más larga (se ensancha con b^¼).
+    expect(nWaveDurationS(200, 0.00762, 2.5)).toBeGreaterThan(nWaveDurationS(20, 0.00762, 2.5));
+  });
+
+  it('el chasquido se apaga con la distancia de paso', () => {
+    expect(nWaveGain(10, 0.00762)).toBeGreaterThan(nWaveGain(100, 0.00762));
+    expect(nWaveGain(1, 0.155)).toBeLessThanOrEqual(1);
+    expect(nWaveGain(300, 0.155)).toBeGreaterThan(nWaveGain(300, 0.00762));
+  });
+});
 
 describe('P-VIVO.1 — audioMath (pan, retardo, silbido)', () => {
   it('pan: ±1 en los costados, 0 de frente y de espaldas', () => {
