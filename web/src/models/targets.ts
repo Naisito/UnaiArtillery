@@ -20,3 +20,7 @@ export function buildTargetTruck(kit: ModelKit): TargetModel {
   }
   return { root, wheels, wheelRadiusM: 0.62, footprintM: 3.8 };
 }
+
+export function buildTargetApc(kit: ModelKit): TargetModel {
+  return buildTargetTruck(kit);
+}
