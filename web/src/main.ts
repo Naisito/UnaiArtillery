@@ -17,6 +17,9 @@ import { CraterLayer } from './vfx/CraterLayer';
 import { TrajectoryPreview } from './TrajectoryPreview';
 import { CameraDirector } from './CameraDirector';
 import { GunModel } from './GunModel';
+// === V2:3D-CORE ===
+import { configureModelRuntime } from './models/runtime';
+// === fin V2:3D-CORE ===
 import { ArtilleryPiece } from './ArtilleryPiece';
 import { MovingTargetActor } from './MovingTarget';
 import { BuildingHit } from './BuildingHit';
@@ -45,6 +48,20 @@ async function boot(): Promise<void> {
 
   const overlay = new ThreeOverlay(viewer, service.frame);
   maybeAttachBloom(overlay);
+  // === V2:3D-CORE ===
+  // Modelos (arma, atrezo, camión del reto) DENTRO de Cesium: GLB generado en
+  // runtime → Cesium.Model (luz solar, sombras, oclusión con el relieve).
+  // `?models=three` vuelve al overlay. El marco ENU se lee en vivo (re-anclaje
+  // y cambio de suelo con los edificios 3D). Las sombras de escena las
+  // gobiernan los preajustes de calidad (VFX); aquí solo se encienden si
+  // nadie lo ha hecho.
+  configureModelRuntime({
+    viewer,
+    frame: () => service.frame,
+    groundZ: (x, y) => service.visualGroundZ(new Vec3(x, y, 0)), // asiento en la pendiente real
+    enableSceneShadows: true,
+  });
+  // === fin V2:3D-CORE ===
   const vfx = new VfxManager(overlay.enuRoot, (pos) => service.atmo.windAt(pos, 0));
   const audio = new AudioBoom();
   // P-VIVO.1 — el pan estéreo gira con la cámara: heading real de Cesium.
