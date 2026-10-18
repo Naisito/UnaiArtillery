@@ -88,7 +88,8 @@ export const buildM270: PlatformBuilder = (ctx) => {
     const mid = (t: number, off: number): [number, number] => [CAB.y1 + a.x * t + nrm.x * off, 1.66 + a.y * t + nrm.y * off];
     for (const s of [-1, 1]) {
       const [y, z] = mid(0.5, 0.012);
-      const glass = kit.box(1.02, L * 0.7, 0.01, kit.glass(), { at: [s * 0.6, y, z] });
+      // Tras las persianas cerradas el cristal se ve oscuro (sin reflejo del cielo).
+      const glass = kit.box(1.02, L * 0.7, 0.01, kit.polymer(0x101418), { at: [s * 0.6, y, z] });
       glass.rotation.x = ang;
       hull.add(glass);
       // Marco de la persiana.
@@ -206,7 +207,8 @@ export const buildM270: PlatformBuilder = (ctx) => {
     g.add(kit.cyl(0.08, 0.08, 0.07, paint, { at: [0, 0.98, 0], segments: 14 }));
     g.add(kit.cyl(0.06, 0.06, 0.12, steel, { axis: 'x', at: [0, 0, 0], segments: 12 }));
     const rodG = kit.group({ name: `act-rod-${s}` });
-    rodG.add(kit.cyl(0.038, 0.038, 1.5, kit.steel(0xb8bcc0, { roughness: 0.2 }), { at: [0, -0.75, 0], segments: 10 }));
+    // Vástago de 1.8 m: cubre de 0° hasta 80° (el catálogo ATACMS llega a 80°).
+    rodG.add(kit.cyl(0.038, 0.038, 1.8, kit.steel(0xb8bcc0, { roughness: 0.2 }), { at: [0, -0.9, 0], segments: 10 }));
     rodG.add(kit.cyl(0.06, 0.06, 0.12, steel, { axis: 'x', at: [0, 0, 0], segments: 12 }));
     g.add(rodG);
     traverse.add(g);

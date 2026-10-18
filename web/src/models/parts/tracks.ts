@@ -216,8 +216,8 @@ function linkTemplate(spec: RunningGearSpec): LinkTemplate {
     g.translate(x, y, T * 0.5);
     steel.push(g);
   };
-  // Zapata: cuerpo central.
-  box(W * 0.92, P * 0.72, T, 0, 0, T / 2, steel);
+  // Zapata: cuerpo central (la soviética, sin conectores, casi sin holgura).
+  box(W * 0.92, P * (spec.style === 'soviet' ? 0.84 : 0.72), T, 0, 0, T / 2, steel);
   // Alojamientos de bulón en ambos extremos del eslabón (doble bulón en la
   // Bradley; ojales alternos del bulón único en la soviética).
   if (spec.style === 'bradley') {

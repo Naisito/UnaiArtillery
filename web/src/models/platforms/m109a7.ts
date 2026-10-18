@@ -279,6 +279,10 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
   ], canvas, { segments: 24 }));
   // Manguito de la cuna que asoma delante de la funda.
   elevation.add(kit.cyl(0.19, 0.19, 0.2, paint, { at: [0, 0.86, 0], segments: 24 }));
+  // Radar de velocidad en boca (MVR) sobre la cuna: sube con el tubo.
+  elevation.add(kit.box(0.08, 0.3, 0.1, paint, { at: [0, 0.78, 0.22], bevel: 0.015 }));
+  elevation.add(kit.box(0.26, 0.12, 0.16, paint, { at: [0, 0.86, 0.33], bevel: 0.02 }));
+  elevation.add(kit.box(0.2, 0.012, 0.1, kit.polymer(0x2a2c26), { at: [0, 0.925, 0.33] }));
 
   const recoil = keep(kit.group({ name: 'recoil' }));
   elevation.add(recoil);
