@@ -145,8 +145,8 @@ function uralChassis(kit: ModelKit, M: UralMats, g: THREE.Group): void {
   g.add(cbox(kit, M.body, 2.38, 0.18, 0.26, 0.02, { at: [0, 3.59, 0.82] }));
   g.add(kit.box(2.38, 0.34, 0.03, M.body, { at: [0, 3.51, 0.965] }));
   for (const s of [-1, 1] as const) {
-    g.add(kit.torus(0.06, 0.02, M.chassis, { axis: 'x', at: [s * 0.5, 3.69, 0.72], segments: 12 }));
-    g.add(kit.box(0.1, 0.12, 0.14, M.chassis, { at: [s * 0.5, 3.66, 0.78] }));
+    g.add(kit.torus(0.055, 0.018, M.chassis, { axis: 'x', at: [s * 0.5, 3.64, 0.66], segments: 12 }));
+    g.add(kit.box(0.1, 0.1, 0.12, M.chassis, { at: [s * 0.5, 3.64, 0.75] }));
     g.add(kit.box(0.08, 0.3, 0.12, M.chassis, { at: [s * 0.44, 3.4, 0.82] }));
   }
   g.add(kit.box(0.52, 0.01, 0.12, M.dark, { at: [0.55, 3.685, 0.82] }));
@@ -158,8 +158,8 @@ function uralChassis(kit: ModelKit, M: UralMats, g: THREE.Group): void {
     g.add(kit.box(0.04, 0.04, 0.35, M.chassis, { at: [s * 0.95, -3.55, 1.25] }));
     g.add(lampRect(kit, M.dark, M.red, { at: [s * 0.95, -3.6, 1.1], w: 0.16, h: 0.08, rotDeg: [0, 0, 180] }));
   }
-  g.add(kit.box(0.24, 0.2, 0.16, M.chassis, { at: [0, -3.6, 0.95] }));
-  g.add(kit.torus(0.06, 0.02, M.steel, { axis: 'z', at: [0, -3.74, 0.92], segments: 12 }));
+  g.add(kit.box(0.24, 0.16, 0.16, M.chassis, { at: [0, -3.56, 0.95] }));
+  g.add(kit.torus(0.05, 0.018, M.steel, { axis: 'z', at: [0, -3.66, 0.92], segments: 12 }));
 }
 
 function uralFront(kit: ModelKit, M: UralMats, g: THREE.Group): void {
@@ -215,8 +215,8 @@ function uralFront(kit: ModelKit, M: UralMats, g: THREE.Group): void {
   g.add(kit.cyl(0.17, 0.17, 0.6, M.dark, { at: [-0.95, 2.05, 1.63], segments: 16 }));
   for (const f of [-0.2, 0.2]) g.add(kit.cyl(0.178, 0.178, 0.03, M.steel, { at: [-0.95, 2.05 + f, 1.63], segments: 16 }));
   g.add(kit.tube([[-0.95, 2.35, 1.62], [-0.88, 2.55, 1.6], [-0.72, 2.6, 1.55]], 0.08, M.dark));
-  g.add(kit.cyl(0.07, 0.07, 0.42, M.dark, { axis: 'z', at: [-0.95, 1.85, 1.95], segments: 12 }));
-  g.add(kit.lathe([[0.13, 0], [0.13, 0.05], [0.09, 0.1], [0, 0.12]], M.dark, { axis: 'z', at: [-0.95, 1.85, 2.14], segments: 14 }));
+  g.add(kit.cyl(0.07, 0.07, 0.3, M.dark, { axis: 'z', at: [-0.95, 1.85, 1.9], segments: 12 }));
+  g.add(kit.lathe([[0.12, 0], [0.12, 0.045], [0.08, 0.09], [0, 0.1]], M.dark, { axis: 'z', at: [-0.95, 1.85, 2.03], segments: 14 }));
 }
 
 function uralCab(kit: ModelKit, M: UralMats, g: THREE.Group): void {
@@ -356,10 +356,10 @@ function uralBed(kit: ModelKit, M: UralMats, g: THREE.Group): void {
 // ============================================================================
 
 const B_HALF_L = 3.825;
-const B_R = 0.565;
+const B_R = 0.58;
 const B_TW = 0.33;
 const B_RIM = 0.229;
-const B_AXLE_Z = 0.555;
+const B_AXLE_Z = 0.57;
 const B_TRACK = 2.41;
 const B_AXLES = [2.3, 0.9, -0.9, -2.3];
 const B_LEDGE_Z0 = 1.24;
@@ -485,7 +485,7 @@ function btrHullDetails(kit: ModelKit, M: BtrMats, g: THREE.Group): void {
     g.add(kit.torus(0.05, 0.016, M.dark, { axis: 'x', at: [s * 0.45, N - 0.08, 0.95], segments: 12 }));
     // Faros con rejilla en las esquinas altas del glacis.
     g.add(kit.cyl(0.03, 0.03, 0.12, M.bodyDark, { axis: 'z', at: [s * 0.95, 2.85, 1.9], segments: 8 }));
-    g.add(lampRound(kit, M.dark, { at: [s * 0.95, 2.92, 2.02], r: 0.085 }));
+    g.add(lampRound(kit, M.dark, { at: [s * 0.95, 2.92, 2.0], r: 0.07, lens: M.glass }));
   }
 
   // Techo: escotillas de conductor/jefe, escotillas de tropa, rejillas
@@ -507,7 +507,7 @@ function btrHullDetails(kit: ModelKit, M: BtrMats, g: THREE.Group): void {
     for (const f of [-0.5, -0.1, 0.3]) {
       g.add(kit.cyl(0.125, 0.125, 0.05, M.bodyDark, { at: [s * 1.02, -2.55 + f, B_ROOF + 0.06], segments: 16 }));
     }
-    g.add(whipAntenna(kit, { at: [s * 0.85, -3.25, B_ROOF], len: 1.6, bendDeg: 20 }));
+    if (s < 0) g.add(whipAntenna(kit, { at: [s * 0.85, -3.25, B_ROOF], len: 1.5, bendDeg: 25 }));
   }
   g.add(kit.box(0.2, 1.2, 0.06, M.bodyDark, { at: [0, -2.45, B_ROOF + 0.03] }));
 
@@ -533,8 +533,16 @@ function btrHullDetails(kit: ModelKit, M: BtrMats, g: THREE.Group): void {
     // Cajones de estiba en el costado trasero.
     sd.add(cbox(kit, M.body, 0.16, 0.95, 0.42, 0.03, { at: [o(0.08), -2.55, sideLen * 0.45] }));
     sd.add(kit.box(0.02, 0.5, 0.04, M.bodyDark, { at: [o(0.165), -2.55, sideLen * 0.55] }));
-    // Asidero largo bajo el techo.
-    sd.add(kit.box(0.04, 1.8, 0.03, M.body, { at: [o(0.03), 1.0, sideLen * 0.88] }));
+    // Asidero largo bajo el techo y periscopios de la tropa en el borde.
+    sd.add(kit.box(0.04, 1.8, 0.03, M.body, { at: [o(0.03), 1.0, sideLen * 0.8] }));
+    for (const y of [2.0, 1.45, 0.62, -0.75]) {
+      sd.add(kit.box(0.03, 0.16, 0.06, M.bodyDark, { at: [o(0.012), y, sideLen * 0.93] }));
+      sd.add(kit.box(0.006, 0.12, 0.035, M.glass, { at: [o(0.03), y, sideLen * 0.93] }));
+    }
+    // Registro de llenado con asa (costado trasero) y piloto de gálibo.
+    sd.add(cbox(kit, M.body, 0.025, 0.55, 0.3, 0.01, { at: [o(0.012), -1.68, sideLen * 0.5] }));
+    sd.add(kit.box(0.03, 0.18, 0.025, M.bodyDark, { at: [o(0.03), -1.68, sideLen * 0.42] }));
+    sd.add(kit.box(0.02, 0.06, 0.04, M.red, { at: [o(0.012), -3.0, sideLen * 0.85] }));
     // Peldaño de la puerta inferior (abatible, plegado) sobre la repisa.
     g.add(cbox(kit, M.body, 0.08, 0.7, 0.3, 0.015, { at: [s * (B_LEDGE_HW - 0.38), -0.1, 1.08] }));
     // Remaches en la repisa.
@@ -556,48 +564,48 @@ function btrTurret(kit: ModelKit, M: BtrMats, g: THREE.Group): void {
   const ty = B_TUR_Y;
   const z0 = B_ROOF;
   // Anillo de la torre.
-  g.add(kit.cyl(0.84, 0.86, 0.06, M.body, { axis: 'z', at: [0, ty, z0 + 0.03], segments: 28 }));
+  g.add(kit.cyl(0.9, 0.92, 0.06, M.body, { axis: 'z', at: [0, ty, z0 + 0.03], segments: 28 }));
   // Cuerpo: octógono inferior → techo menor desplazado atrás, frente plano.
   const pts: V3[] = [];
   for (let i = 0; i < 8; i++) {
     const a = ((i + 0.5) / 8) * Math.PI * 2;
-    pts.push([Math.cos(a) * 0.8, ty + Math.sin(a) * 0.8 * 0.95, z0 + 0.06]);
-    pts.push([Math.cos(a) * 0.56, ty - 0.08 + Math.sin(a) * 0.52, z0 + 0.46]);
+    pts.push([Math.cos(a) * 0.86, ty + Math.sin(a) * 0.86 * 0.95, z0 + 0.06]);
+    pts.push([Math.cos(a) * 0.6, ty - 0.08 + Math.sin(a) * 0.56, z0 + 0.52]);
   }
-  pts.push([0.3, ty + 0.8, z0 + 0.08], [-0.3, ty + 0.8, z0 + 0.08], [0.3, ty + 0.62, z0 + 0.4], [-0.3, ty + 0.62, z0 + 0.4]);
+  pts.push([0.32, ty + 0.86, z0 + 0.08], [-0.32, ty + 0.86, z0 + 0.08], [0.32, ty + 0.68, z0 + 0.46], [-0.32, ty + 0.68, z0 + 0.46]);
   g.add(hull(kit, M.body, pts, { smoothDeg: 28 }));
   // Escotilla del tirador y visor TKN (caja con capuchón) + 1PZ-10.
-  g.add(kit.cyl(0.24, 0.25, 0.05, M.body, { axis: 'z', at: [0.12, ty - 0.2, z0 + 0.485], segments: 18 }));
-  g.add(cbox(kit, M.body, 0.22, 0.28, 0.2, 0.02, { at: [-0.3, ty + 0.25, z0 + 0.55] }));
-  g.add(kit.box(0.16, 0.006, 0.1, M.glass, { at: [-0.3, ty + 0.392, z0 + 0.57] }));
-  g.add(cbox(kit, M.body, 0.16, 0.2, 0.14, 0.02, { at: [0.28, ty + 0.3, z0 + 0.52] }));
-  g.add(kit.box(0.1, 0.006, 0.07, M.glass, { at: [0.28, ty + 0.402, z0 + 0.53] }));
+  g.add(kit.cyl(0.26, 0.27, 0.05, M.body, { axis: 'z', at: [0.12, ty - 0.22, z0 + 0.545], segments: 18 }));
+  g.add(cbox(kit, M.body, 0.24, 0.3, 0.24, 0.02, { at: [-0.3, ty + 0.26, z0 + 0.62] }));
+  g.add(kit.box(0.18, 0.006, 0.12, M.glass, { at: [-0.3, ty + 0.412, z0 + 0.64] }));
+  g.add(cbox(kit, M.body, 0.18, 0.22, 0.18, 0.02, { at: [0.3, ty + 0.3, z0 + 0.6] }));
+  g.add(kit.box(0.12, 0.006, 0.08, M.glass, { at: [0.3, ty + 0.412, z0 + 0.61] }));
   // Proyector IR OU-3GA2M en el costado izquierdo.
-  g.add(kit.cyl(0.11, 0.12, 0.2, M.bodyDark, { axis: 'y', at: [-0.62, ty + 0.3, z0 + 0.4], segments: 16 }));
-  g.add(kit.cyl(0.095, 0.095, 0.01, M.lens, { axis: 'y', at: [-0.62, ty + 0.405, z0 + 0.4], segments: 16 }));
-  g.add(kit.box(0.06, 0.12, 0.1, M.body, { at: [-0.55, ty + 0.28, z0 + 0.3] }));
+  g.add(kit.cyl(0.11, 0.12, 0.2, M.bodyDark, { axis: 'y', at: [-0.66, ty + 0.32, z0 + 0.44], segments: 16 }));
+  g.add(kit.cyl(0.095, 0.095, 0.01, M.glass, { axis: 'y', at: [-0.66, ty + 0.425, z0 + 0.44], segments: 16 }));
+  g.add(kit.box(0.06, 0.12, 0.1, M.body, { at: [-0.6, ty + 0.3, z0 + 0.33] }));
 
   // Manto y armamento: 2A72 (30 mm) con camisa y freno, PKTM coaxial.
-  const gz = z0 + 0.26;
-  const gy = ty + 0.78;
+  const gz = z0 + 0.28;
+  const gy = ty + 0.84;
   g.add(cbox(kit, M.body, 0.44, 0.22, 0.28, 0.03, { at: [0, gy, gz] }));
-  g.add(kit.cyl(0.075, 0.07, 0.5, M.body, { at: [-0.04, gy + 0.35, gz], segments: 14 }));
-  g.add(kit.cyl(0.042, 0.04, 1.85, M.steel, { at: [-0.04, gy + 1.5, gz], segments: 12 }));
-  g.add(kit.lathe([[0.04, 0], [0.055, 0.02], [0.055, 0.14], [0.045, 0.16], [0.03, 0.16]], M.steel,
-    { axis: 'y', at: [-0.04, gy + 2.42, gz], segments: 12 }));
+  g.add(kit.cyl(0.075, 0.07, 0.45, M.body, { at: [-0.04, gy + 0.32, gz], segments: 14 }));
+  g.add(kit.cyl(0.042, 0.038, 1.3, M.steel, { at: [-0.04, gy + 1.19, gz], segments: 12 }));
+  g.add(kit.lathe([[0.038, 0], [0.052, 0.02], [0.052, 0.13], [0.044, 0.15], [0.03, 0.15]], M.steel,
+    { axis: 'y', at: [-0.04, gy + 1.84, gz], segments: 12 }));
   g.add(kit.cyl(0.018, 0.016, 0.55, M.dark, { at: [0.16, gy + 0.36, gz - 0.02], segments: 8 }));
   // Lanzafumígenos 902V: 3 por lado en el frente de la torre, hacia arriba.
   for (const s of [-1, 1] as const) {
-    g.add(kit.box(0.26, 0.08, 0.08, M.body, { at: [s * 0.42, ty + 0.62, z0 + 0.42] }));
+    g.add(kit.box(0.26, 0.08, 0.08, M.body, { at: [s * 0.44, ty + 0.66, z0 + 0.48] }));
     for (let i = 0; i < 3; i++) {
       g.add(kit.cyl(0.042, 0.042, 0.24, M.bodyDark, {
-        at: [s * (0.33 + i * 0.09), ty + 0.7, z0 + 0.5], rotDeg: [35, 0, -s * 12], segments: 10,
+        at: [s * (0.35 + i * 0.09), ty + 0.74, z0 + 0.56], rotDeg: [35, 0, -s * 12], segments: 10,
       }));
     }
   }
   // Funda de lona trasera y antena de la torre.
-  g.add(cbox(kit, M.canvas, 0.6, 0.3, 0.25, 0.06, { at: [0.0, ty - 0.66, z0 + 0.35] }));
-  g.add(whipAntenna(kit, { at: [-0.4, ty - 0.45, z0 + 0.46], len: 1.4, bendDeg: 15 }));
+  g.add(cbox(kit, M.canvas, 0.62, 0.3, 0.26, 0.06, { at: [0.0, ty - 0.72, z0 + 0.36] }));
+  g.add(whipAntenna(kit, { at: [-0.42, ty - 0.48, z0 + 0.5], len: 1.4, bendDeg: 15 }));
 }
 
 // Aliases para quien importe los blancos por nombre de vehículo.

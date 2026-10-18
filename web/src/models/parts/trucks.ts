@@ -321,12 +321,12 @@ export function tireGeometry(spec: TireSpec): THREE.BufferGeometry {
       addLug(thHalf, hw * 0.96, W * 0.08, pitch * 0.45, 0, depth * 0.8);
     } else if (pattern === 'ural') {
       // Espiga direccional: dos tacos inclinados que casi se tocan.
-      addLug(th, -W * 0.24, W * 0.5, pitch * 0.42, 34);
-      addLug(th, W * 0.24, W * 0.5, pitch * 0.42, -34);
+      addLug(th, -W * 0.23, W * 0.42, pitch * 0.44, 30);
+      addLug(th, W * 0.23, W * 0.42, pitch * 0.44, -30);
     } else {
       // KI-80: chevron continuo que cruza el centro, más bajo.
-      addLug(th, -W * 0.22, W * 0.52, pitch * 0.4, 40, depth * 0.85);
-      addLug(th, W * 0.22, W * 0.52, pitch * 0.4, -40, depth * 0.85);
+      addLug(th, -W * 0.22, W * 0.44, pitch * 0.4, 36, depth * 0.85);
+      addLug(th, W * 0.22, W * 0.44, pitch * 0.4, -36, depth * 0.85);
       addLug(thHalf, 0, W * 0.16, pitch * 0.35, 0, depth * 0.7);
     }
   }
