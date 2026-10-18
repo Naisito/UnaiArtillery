@@ -22,7 +22,7 @@
 // ============================================================================
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PAINT, type ModelKit, type PlaceOpts, type V3 } from '../kit';
 
 const DEG = Math.PI / 180;
@@ -142,21 +142,82 @@ export function boxProjectUV(geo: THREE.BufferGeometry): void {
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
 }
 
+export interface HullOpts extends PlaceOpts {
+  /**
+   * Ángulo de pliegue (grados): las aristas más suaves que esto se
+   * sombrean redondeadas (techos, capós, lonas); 0/undefined = facetado.
+   */
+  smoothDeg?: number;
+}
+
 /** Envolvente convexa de los puntos dados (caras planas, sombreado facetado). */
-export function hull(kit: ModelKit, mat: THREE.Material, pts: V3[], opts: PlaceOpts = {}): THREE.Mesh {
-  const geo = new ConvexGeometry(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
+export function hull(kit: ModelKit, mat: THREE.Material, pts: V3[], opts: HullOpts = {}): THREE.Mesh {
+  let geo: THREE.BufferGeometry = new ConvexGeometry(pts.map(([x, y, z]) => new THREE.Vector3(x, y, z)));
   boxProjectUV(geo);
+  if (opts.smoothDeg) {
+    const sm = toCreasedNormals(geo, opts.smoothDeg * DEG);
+    if (sm !== geo) geo.dispose();
+    geo = sm;
+  }
   return kit.place(kit.mesh(geo, mat), opts);
 }
 
 /** Envolvente convexa simétrica en X: `half` lleva los puntos con x ≥ 0. */
-export function hullSym(kit: ModelKit, mat: THREE.Material, half: V3[], opts: PlaceOpts = {}): THREE.Mesh {
+export function hullSym(kit: ModelKit, mat: THREE.Material, half: V3[], opts: HullOpts = {}): THREE.Mesh {
   const pts: V3[] = [];
   for (const [x, y, z] of half) {
     pts.push([x, y, z]);
     if (Math.abs(x) > 1e-6) pts.push([-x, y, z]);
   }
   return hull(kit, mat, pts, opts);
+}
+
+/**
+ * Anillo de puntos de un rectángulo redondeado en planta (para envolventes
+ * de cabinas con esquinas verticales redondeadas): centro (cx, cy), semi-
+ * anchos (hx, hy), radio r, cota z, `n` puntos por esquina.
+ */
+export function roundRectRing(cx: number, cy: number, hx: number, hy: number, r: number, z: number, n = 3): V3[] {
+  const out: V3[] = [];
+  const rr = Math.min(r, hx - 1e-3, hy - 1e-3);
+  const corners: Array<[number, number, number]> = [
+    [cx + hx - rr, cy + hy - rr, 0], [cx - hx + rr, cy + hy - rr, 90],
+    [cx - hx + rr, cy - hy + rr, 180], [cx + hx - rr, cy - hy + rr, 270],
+  ];
+  for (const [ox, oy, a0] of corners) {
+    for (let i = 0; i <= n; i++) {
+      const a = (a0 + (90 * i) / n) * DEG;
+      out.push([ox + Math.cos(a) * rr, oy + Math.sin(a) * rr, z]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Prisma a lo largo de Y: sección `section` = [[x, z], …] (polígono
+ * cerrado) extruida de y0 a y1. Con `smoothDeg` las aristas de la sección
+ * más suaves que ese ángulo se sombrean redondeadas (capós, lonas).
+ */
+export function prismY(
+  kit: ModelKit, mat: THREE.Material, section: Array<[number, number]>, y0: number, y1: number,
+  opts: HullOpts = {},
+): THREE.Mesh {
+  const shape = new THREE.Shape(section.map(([x, z]) => new THREE.Vector2(x, z)));
+  let geo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(shape, { depth: Math.abs(y1 - y0), bevelEnabled: false });
+  // (u, v, w) → (x = u, y = y1 − w, z = v): determinante +1, no invierte caras.
+  geo.applyMatrix4(new THREE.Matrix4().set(
+    1, 0, 0, 0,
+    0, 0, -1, Math.max(y0, y1),
+    0, 1, 0, 0,
+    0, 0, 0, 1,
+  ));
+  geo.computeVertexNormals();
+  if (opts.smoothDeg) {
+    const sm = toCreasedNormals(geo, opts.smoothDeg * DEG);
+    if (sm !== geo) geo.dispose();
+    geo = sm;
+  }
+  return kit.place(kit.mesh(geo, mat), opts);
 }
 
 /**
