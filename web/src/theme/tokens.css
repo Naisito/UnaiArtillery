@@ -1,0 +1,105 @@
+/* ==========================================================================
+   tokens.css — Tokens de diseño de Unai Artillery V2.
+   Fuente ÚNICA de color, tipografía, espaciado, radios, sombras y capas.
+   DUEÑO: agente UI (puede AJUSTAR valores; los NOMBRES son contrato con el
+   resto de módulos — p. ej. src/map/* — y no se renombran).
+   Estética: sistema de dirección de tiro moderno (C2 táctico), cristal
+   oscuro, un único acento ámbar para armas/fuego, cian para datos.
+   ========================================================================== */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource/barlow-condensed/500.css';
+@import '@fontsource/barlow-condensed/600.css';
+@import '@fontsource/barlow-condensed/700.css';
+
+:root {
+  /* --- Superficies ------------------------------------------------------ */
+  --ua-bg-0: #06080b;                         /* fondo de la app */
+  --ua-surface-1: rgba(11, 15, 20, 0.84);     /* paneles/docks */
+  --ua-surface-2: rgba(20, 26, 34, 0.92);     /* tarjetas, inputs */
+  --ua-surface-3: rgba(30, 38, 48, 0.96);     /* hover/activo */
+  --ua-surface-solid: #0d1117;                /* menús/popovers opacos */
+  --ua-scrim: rgba(3, 5, 8, 0.62);            /* velos de modales */
+
+  /* --- Bordes ------------------------------------------------------------ */
+  --ua-border: rgba(148, 163, 184, 0.14);
+  --ua-border-strong: rgba(148, 163, 184, 0.28);
+  --ua-border-focus: rgba(245, 165, 36, 0.75);
+
+  /* --- Texto ------------------------------------------------------------- */
+  --ua-text-1: #e8edf2;   /* principal */
+  --ua-text-2: #a3afbb;   /* secundario */
+  --ua-text-3: #6b7785;   /* terciario / unidades */
+  --ua-text-inverse: #0b0e12;
+
+  /* --- Acentos y semántica --------------------------------------------- */
+  --ua-accent: #f5a524;          /* armas, FUEGO, selección */
+  --ua-accent-hover: #ffb84d;
+  --ua-accent-soft: rgba(245, 165, 36, 0.14);
+  --ua-info: #38bdf8;            /* datos, telemetría, soluciones */
+  --ua-info-soft: rgba(56, 189, 248, 0.14);
+  --ua-ok: #34d399;
+  --ua-warn: #fbbf24;
+  --ua-danger: #f43f5e;
+  --ua-danger-soft: rgba(244, 63, 94, 0.14);
+  /* Simbología APP-6 (OTAN) */
+  --ua-friendly: #4c9aff;        /* propio (azul) */
+  --ua-hostile: #ff4d4f;         /* hostil (rojo) */
+  --ua-neutral: #6ee7a0;         /* neutral (verde) */
+  --ua-unknown: #ffe066;         /* desconocido (amarillo) */
+
+  /* --- Tipografía -------------------------------------------------------- */
+  --ua-font-ui: 'Inter Variable', 'Segoe UI', system-ui, sans-serif;
+  --ua-font-mono: 'JetBrains Mono Variable', ui-monospace, Consolas, monospace;
+  --ua-font-display: 'Barlow Condensed', 'Inter Variable', sans-serif;
+  --ua-fs-xs: 11px;
+  --ua-fs-s: 12px;
+  --ua-fs-m: 13px;
+  --ua-fs-l: 15px;
+  --ua-fs-xl: 20px;
+  --ua-fs-xxl: 28px;
+  --ua-tracking-caps: 0.08em;
+
+  /* --- Espaciado (rejilla de 4 px) --------------------------------------- */
+  --ua-sp-1: 4px;
+  --ua-sp-2: 8px;
+  --ua-sp-3: 12px;
+  --ua-sp-4: 16px;
+  --ua-sp-5: 24px;
+  --ua-sp-6: 32px;
+
+  /* --- Radios, sombras, desenfoque --------------------------------------- */
+  --ua-radius-s: 4px;
+  --ua-radius-m: 8px;
+  --ua-radius-l: 12px;
+  --ua-shadow-panel: 0 10px 30px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --ua-shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --ua-blur: 14px;
+
+  /* --- Movimiento -------------------------------------------------------- */
+  --ua-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ua-dur-fast: 120ms;
+  --ua-dur: 200ms;
+  --ua-dur-slow: 320ms;
+
+  /* --- Distribución (la UI los mantiene al plegar/desplegar docks; los
+         widgets del mapa se colocan con ellos para no solaparse) ---------- */
+  --ua-topbar-h: 52px;
+  --ua-left-dock-w: 360px;
+  --ua-right-dock-w: 340px;
+  --ua-gutter: 12px;
+  /* Franja inferior del área de mapa (entre docks) reservada a los widgets
+     del mapa: coordenadas bajo el cursor, escala y créditos de Cesium. */
+  --ua-statusbar-h: 32px;
+
+  /* --- Capas (z-index) --------------------------------------------------- */
+  --ua-z-three: 5;        /* canvas Three.js sobre Cesium */
+  --ua-z-map-hud: 8;      /* widgets del mapa (coordenadas, brújula…) */
+  --ua-z-gunner-hud: 9;   /* HUD de artillero (cabina) */
+  --ua-z-dock: 10;        /* docks laterales y telemetría */
+  --ua-z-topbar: 20;
+  --ua-z-popover: 30;     /* menús, menú contextual, tooltips */
+  --ua-z-modal: 40;
+  --ua-z-toast: 50;
+  --ua-z-tutorial: 60;
+}

@@ -665,6 +665,12 @@ async function boot(): Promise<void> {
     }
     if (!restored) piece.schedulePreview(400); // primer arco al arrancar
   }
+  // V2 — asa de automatización/depuración: las capturas headless
+  // (tools/shot.mjs --ready __uaReady) y la consola manejan la app con ella.
+  Object.assign(window as unknown as Record<string, unknown>, {
+    __ua: { Cesium, viewer, service, overlay, piece, gun, panel, director, preview, vfx, craters, weather, hud, audio },
+    __uaReady: true,
+  });
   console.log('[UnaiArtillery] listo — física validada, globo real, fuego a discreción');
 }
 

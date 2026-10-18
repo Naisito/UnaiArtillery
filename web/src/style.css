@@ -1,3 +1,5 @@
+@import './theme/tokens.css';
+
 /* ==========================================================================
    Unai Artillery — estilos de la interfaz (overlay sobre el globo Cesium).
    Estética "consola de tiro": paneles oscuros translúcidos, acentos ámbar.
