@@ -242,7 +242,15 @@ export class Tutorial {
     let left: number;
     let top: number;
     let side: string;
-    if (r.right + gap + cw < vw - 8) {
+    // Dentro de un dock, la tarjeta sale FUERA de él (sobre el mapa) para no
+    // tapar los controles vecinos; la flecha apunta al ancla.
+    const dock = anchor.closest<HTMLElement>('#leftDock, #rightDock');
+    const dr = dock && vw > 900 ? dock.getBoundingClientRect() : null;
+    if (dr && dock!.id === 'leftDock' && dr.right + gap + cw < vw - 8) {
+      left = dr.right + gap; top = r.top + r.height / 2 - ch / 2; side = 'right';
+    } else if (dr && dock!.id === 'rightDock' && dr.left - gap - cw > 8) {
+      left = dr.left - gap - cw; top = r.top + r.height / 2 - ch / 2; side = 'left';
+    } else if (r.right + gap + cw < vw - 8) {
       left = r.right + gap; top = r.top + r.height / 2 - ch / 2; side = 'right';
     } else if (r.left - gap - cw > 8) {
       left = r.left - gap - cw; top = r.top + r.height / 2 - ch / 2; side = 'left';

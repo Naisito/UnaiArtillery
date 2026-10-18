@@ -622,49 +622,27 @@ async function boot(): Promise<void> {
   }, 5000);
 
   // -- Cámara inicial ----------------------------------------------------------
-  // V2 — plano "de batería": por detrás y a la izquierda de la pieza, mirando
-  // a lo largo del azimut de tiro (la pieza en primer término y el arco
-  // saliendo hacia el objetivo). Se eleva si el relieve taparía la cámara.
+  // Plano de batería clásico (SO de la pieza mirando al NE con azimut 90°),
+  // V2: girado con el azimut de tiro para que el arco cruce siempre el
+  // encuadre en diagonal, sea cual sea la dirección de tiro.
   function flyToBattery(fast: boolean): void {
     const f = service.frame;
-    const az = (panel.azimuthDeg * Math.PI) / 180;
-    const fx = Math.sin(az);
-    const fy = Math.cos(az);
-    const rx = Math.cos(az);
-    const ry = -Math.sin(az);
-    const pos = new Vec3(-980 * fx - 420 * rx, -980 * fy - 420 * ry, 520);
-    const look = new Vec3(900 * fx, 900 * fy, 0);
-    const fly = (p: Vec3) => {
-      const d = new Vec3(look.x - p.x, look.y - p.y, look.z - p.z);
-      const dl = Math.hypot(d.x, d.y, d.z) || 1;
-      const dir = new Vec3(d.x / dl, d.y / dl, d.z / dl);
-      // up = (dir × Z) × dir, normalizado.
-      const cx = dir.y;
-      const cy = -dir.x;
-      const up = new Vec3(cy * dir.z, -cx * dir.z, cx * dir.y - cy * dir.x);
-      const ul = Math.hypot(up.x, up.y, up.z) || 1;
-      viewer.camera.flyTo({
-        destination: f.enuToEcef(p),
-        orientation: {
-          direction: Cesium.Cartesian3.normalize(f.enuVectorToEcef(dir), new Cesium.Cartesian3()),
-          up: Cesium.Cartesian3.normalize(
-            f.enuVectorToEcef(new Vec3(up.x / ul, up.y / ul, up.z / ul)), new Cesium.Cartesian3(),
-          ),
-        },
-        duration: fast ? 1.2 : 2.8,
-      });
-    };
-    fly(pos);
-    // El relieve entre la cámara y la pieza no debe tapar el plano: se
-    // muestrea (async) y, si hace falta, la cámara se eleva por encima.
-    const probes = [0.0, 0.25, 0.5, 0.75].map((k) => new Vec3(pos.x * (1 - k), pos.y * (1 - k), 0));
-    service.terrainZRelative(probes).then(
-      (zs) => {
-        const top = Math.max(0, ...zs.filter((z) => Number.isFinite(z)));
-        if (top + 120 > pos.z) fly(new Vec3(pos.x, pos.y, top + 120));
+    const th = ((panel.azimuthDeg - 90) * Math.PI) / 180;
+    const c = Math.cos(th);
+    const sn = Math.sin(th);
+    const rot = (x: number, y: number, z: number) => new Vec3(x * c + y * sn, -x * sn + y * c, z);
+    viewer.camera.flyTo({
+      destination: f.enuToEcef(rot(-900, -900, 500)),
+      orientation: {
+        direction: Cesium.Cartesian3.normalize(
+          f.enuVectorToEcef(rot(0.62, 0.62, -0.28)), new Cesium.Cartesian3(),
+        ),
+        up: Cesium.Cartesian3.normalize(
+          f.enuVectorToEcef(rot(0.2, 0.2, 0.96)), new Cesium.Cartesian3(),
+        ),
       },
-      () => { /* sin muestras: se queda la pose por defecto */ },
-    );
+      duration: fast ? 1.2 : 2.8,
+    });
   }
   flyToBattery(false);
 
