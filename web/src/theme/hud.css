@@ -1,0 +1,244 @@
+/* ==========================================================================
+   hud.css — HUD de artillero (cámara Artillero), panel de corrección del
+   observador avanzado y coach-marks del tutorial.
+   ========================================================================== */
+
+/* --- HUD de artillero: dentro del área de mapa ------------------------------ */
+#gunnerHud {
+  position: fixed;
+  z-index: var(--ua-z-gunner-hud); /* bajo los docks: el cockpit sigue vivo */
+  top: var(--ua-topbar-h);
+  left: var(--ua-left-dock-w);
+  right: var(--ua-right-dock-w);
+  bottom: 0;
+  pointer-events: none;
+  display: none;
+  transition: left var(--ua-dur) var(--ua-ease), right var(--ua-dur) var(--ua-ease);
+}
+#gunnerHud.active { display: block; }
+/* Viñeta sutil de visor: se lee la retícula sobre cualquier fondo. */
+#gunnerHud::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
+}
+#gunnerHud .gh-tape {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+#gunnerHud .gh-gauge {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+#gunnerHud .gh-info {
+  position: absolute;
+  top: 86px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--ua-border);
+  background: rgba(7, 10, 14, 0.78);
+  font: 500 11.5px / 1.3 var(--ua-font-mono);
+  color: var(--ua-info);
+  white-space: nowrap;
+}
+/* Retícula de milésimas: cruz con hueco, anillo y estadía. */
+#gunnerHud .gh-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 180px;
+  height: 180px;
+  transform: translate(-50%, -50%);
+}
+.gh-reticle > span { position: absolute; display: block; }
+.gh-r-h, .gh-r-v { background: transparent; }
+.gh-r-h {
+  left: 0; right: 0; top: 50%; height: 1px;
+  background: linear-gradient(90deg, rgba(245,165,36,0.85) 0 38%, transparent 38% 62%, rgba(245,165,36,0.85) 62% 100%);
+}
+.gh-r-v {
+  top: 0; bottom: 0; left: 50%; width: 1px;
+  background: linear-gradient(180deg, rgba(245,165,36,0.85) 0 38%, transparent 38% 62%, rgba(245,165,36,0.85) 62% 100%);
+}
+.gh-r-ring {
+  left: 50%; top: 50%;
+  width: 34px; height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  border: 1px solid rgba(245, 165, 36, 0.6);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.gh-r-ring::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 3px; height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--ua-accent);
+}
+.gh-r-ticks {
+  left: 0; right: 0; top: calc(50% + 4px); height: 6px;
+  background:
+    repeating-linear-gradient(90deg, rgba(245,165,36,0.7) 0 1px, transparent 1px 15px) left / 38% 100% no-repeat,
+    repeating-linear-gradient(270deg, rgba(245,165,36,0.7) 0 1px, transparent 1px 15px) right / 38% 100% no-repeat;
+}
+#gunnerHud .gh-map {
+  position: absolute;
+  right: 16px;
+  bottom: calc(var(--ua-statusbar-h) + 16px);
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--ua-border);
+  background: rgba(7, 10, 14, 0.6);
+  backdrop-filter: blur(6px);
+}
+#gunnerHud .gh-map canvas { display: block; }
+#gunnerHud .gh-map-label {
+  margin-top: 4px;
+  text-align: center;
+  font: 600 10px / 1 var(--ua-font-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ua-text-3);
+}
+/* En cabina la telemetría deja sitio al minimapa y la cinta al selector de
+   cámara (arriba-izquierda). */
+body.cam-cabin #telemetry { right: calc(var(--ua-right-dock-w) + 236px); }
+body.cam-cabin #gunnerHud .gh-tape { top: 84px; }
+body.cam-cabin #gunnerHud .gh-info { top: 158px; }
+
+/* --- Panel de corrección del Observador Avanzado (#foPanel) ----------------- */
+#foPanel {
+  position: fixed;
+  z-index: calc(var(--ua-z-dock) + 1);
+  left: calc(var(--ua-left-dock-w) + var(--ua-gutter));
+  right: calc(var(--ua-right-dock-w) + var(--ua-gutter));
+  bottom: calc(var(--ua-statusbar-h) + var(--ua-bottomnav-h) + var(--ua-gutter));
+  margin: 0 auto;
+  width: min(640px, calc(100% - 0px));
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--ua-accent-line);
+  background: var(--ua-surface-1);
+  backdrop-filter: blur(var(--ua-blur)) saturate(1.3);
+  box-shadow: var(--ua-shadow-panel), 0 0 0 1px rgba(245, 165, 36, 0.1);
+  animation: ua-fade-in var(--ua-dur) var(--ua-ease);
+}
+.fo-head { display: flex; align-items: center; gap: 10px; }
+.fo-head__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--ua-accent);
+  background: var(--ua-accent-soft);
+}
+.fo-head__titles { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.fo-head__title { font: 600 14px / 1.1 var(--ua-font-ui); }
+.fo-head__rounds { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.fo-rounds { font-size: 20px; font-weight: 500; color: var(--ua-accent); line-height: 1; }
+.fo-row { display: grid; grid-template-columns: 70px 1fr 10px 1fr; align-items: center; gap: 6px; }
+.fo-row__label { font: 600 10.5px / 1 var(--ua-font-display); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ua-text-3); }
+.fo-row__axis { width: 1px; height: 22px; margin: 0 auto; background: var(--ua-border-strong); }
+.fo-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.fo-btn {
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid var(--ua-border);
+  background: rgba(19, 25, 33, 0.85);
+  color: var(--ua-text-1);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--ua-dur-fast) var(--ua-ease);
+}
+.fo-btn:hover { border-color: var(--ua-accent-line); color: var(--ua-accent); background: var(--ua-accent-soft); }
+.fo-btn:active { transform: translateY(1px); }
+.fo-status { margin: 0; font: 500 11.5px / 1.4 var(--ua-font-mono); color: var(--ua-text-2); }
+
+/* --- Tutorial: anillo + tarjeta (sin velo) --------------------------------- */
+#tutorialOverlay { position: fixed; inset: 0; z-index: var(--ua-z-tutorial); pointer-events: none; }
+.tut-ring {
+  position: fixed;
+  border-radius: 11px;
+  border: 2px solid var(--ua-accent);
+  box-shadow: 0 0 0 4px rgba(245, 165, 36, 0.18), 0 0 24px rgba(245, 165, 36, 0.45);
+  animation: tut-ring 1.6s ease-in-out infinite;
+  transition: left var(--ua-dur-slow) var(--ua-ease), top var(--ua-dur-slow) var(--ua-ease), width var(--ua-dur-slow) var(--ua-ease), height var(--ua-dur-slow) var(--ua-ease);
+}
+@keyframes tut-ring {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(245, 165, 36, 0.18), 0 0 24px rgba(245, 165, 36, 0.45); }
+  50% { box-shadow: 0 0 0 8px rgba(245, 165, 36, 0.06), 0 0 34px rgba(245, 165, 36, 0.3); }
+}
+.tut-card {
+  --arrow-x: 24px;
+  --arrow-y: 24px;
+  position: fixed;
+  width: 320px;
+  display: grid;
+  gap: 8px;
+  padding: 14px 14px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--ua-accent-line);
+  background: rgba(12, 16, 22, 0.98);
+  box-shadow: var(--ua-shadow-pop), 0 0 0 1px rgba(245, 165, 36, 0.12);
+  pointer-events: auto;
+  transition: left var(--ua-dur-slow) var(--ua-ease), top var(--ua-dur-slow) var(--ua-ease);
+}
+.tut-card.is-in { animation: ua-fade-in var(--ua-dur-slow) var(--ua-ease); }
+.tut-card::before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: rgba(12, 16, 22, 0.98);
+  border: 1px solid var(--ua-accent-line);
+  transform: rotate(45deg);
+}
+.tut-card[data-side='right']::before { left: -7px; top: calc(var(--arrow-y) - 6px); border-top: 0; border-right: 0; }
+.tut-card[data-side='left']::before { right: -7px; top: calc(var(--arrow-y) - 6px); border-bottom: 0; border-left: 0; }
+.tut-card[data-side='below']::before { top: -7px; left: calc(var(--arrow-x) - 6px); border-bottom: 0; border-right: 0; }
+.tut-card[data-side='above']::before { bottom: -7px; left: calc(var(--arrow-x) - 6px); border-top: 0; border-left: 0; }
+.tut-card[data-side='none']::before { display: none; }
+.tut-card__head { display: flex; align-items: center; justify-content: space-between; }
+.tut-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 600 10.5px / 1 var(--ua-font-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ua-accent);
+}
+.tut-step { font-size: 11px; color: var(--ua-text-3); }
+.tut-title { margin: 2px 0 0; font: 600 15px / 1.25 var(--ua-font-ui); color: var(--ua-text-1); }
+.tut-text { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ua-text-2); }
+.tut-card__foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.tut-grow { flex: 1; }
+.tut-dots { display: flex; gap: 4px; }
+.tut-dot { width: 14px; height: 3px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); transition: background var(--ua-dur); }
+.tut-dot.is-done { background: rgba(245, 165, 36, 0.5); }
+.tut-dot.is-on { background: var(--ua-accent); }
+
+@media (max-width: 900px) {
+  #gunnerHud .gh-gauge { left: 8px; transform: translateY(-50%) scale(0.85); transform-origin: left center; }
+  #gunnerHud .gh-tape { transform: translateX(-50%) scale(0.62); transform-origin: top center; }
+  #gunnerHud .gh-info { top: 56px; }
+  #gunnerHud .gh-map { right: 8px; bottom: calc(var(--ua-bottomnav-h) + var(--ua-statusbar-h) + 100px); transform: scale(0.7); transform-origin: right bottom; }
+  #foPanel { left: 8px; right: 8px; width: auto; bottom: calc(var(--ua-bottomnav-h) + var(--ua-statusbar-h) + 8px); }
+  .fo-row { grid-template-columns: 1fr; }
+  .fo-row__axis { display: none; }
+  .tut-card { width: min(320px, calc(100vw - 16px)); }
+}

@@ -15,10 +15,10 @@
 :root {
   /* --- Superficies ------------------------------------------------------ */
   --ua-bg-0: #06080b;                         /* fondo de la app */
-  --ua-surface-1: rgba(11, 15, 20, 0.84);     /* paneles/docks */
-  --ua-surface-2: rgba(20, 26, 34, 0.92);     /* tarjetas, inputs */
-  --ua-surface-3: rgba(30, 38, 48, 0.96);     /* hover/activo */
-  --ua-surface-solid: #0d1117;                /* menús/popovers opacos */
+  --ua-surface-1: rgba(9, 13, 18, 0.86);      /* paneles/docks */
+  --ua-surface-2: rgba(19, 25, 33, 0.9);      /* tarjetas, inputs */
+  --ua-surface-3: rgba(31, 39, 50, 0.96);     /* hover/activo */
+  --ua-surface-solid: #0c1016;                /* menús/popovers opacos */
   --ua-scrim: rgba(3, 5, 8, 0.62);            /* velos de modales */
 
   /* --- Bordes ------------------------------------------------------------ */
@@ -42,6 +42,12 @@
   --ua-warn: #fbbf24;
   --ua-danger: #f43f5e;
   --ua-danger-soft: rgba(244, 63, 94, 0.14);
+  /* V2/UI — líneas y velos derivados de los acentos (tokens nuevos). */
+  --ua-accent-line: rgba(245, 165, 36, 0.45);
+  --ua-info-line: rgba(56, 189, 248, 0.42);
+  --ua-ok-soft: rgba(52, 211, 153, 0.14);
+  --ua-warn-soft: rgba(251, 191, 36, 0.14);
+  --ua-well: rgba(2, 5, 9, 0.55);             /* pozos: inputs, pistas */
   /* Simbología APP-6 (OTAN) */
   --ua-friendly: #4c9aff;        /* propio (azul) */
   --ua-hostile: #ff4d4f;         /* hostil (rojo) */
@@ -85,12 +91,16 @@
   /* --- Distribución (la UI los mantiene al plegar/desplegar docks; los
          widgets del mapa se colocan con ellos para no solaparse) ---------- */
   --ua-topbar-h: 52px;
-  --ua-left-dock-w: 360px;
-  --ua-right-dock-w: 340px;
+  --ua-left-dock-w: 368px;
+  --ua-right-dock-w: 344px;
   --ua-gutter: 12px;
   /* Franja inferior del área de mapa (entre docks) reservada a los widgets
      del mapa: coordenadas bajo el cursor, escala y créditos de Cesium. */
   --ua-statusbar-h: 32px;
+  /* V2/UI — riel de un dock plegado y barra inferior móvil (< 900 px; 0 en
+     escritorio). Los widgets del mapa deben quedar por ENCIMA de ella. */
+  --ua-rail-w: 52px;
+  --ua-bottomnav-h: 0px;
 
   /* --- Capas (z-index) --------------------------------------------------- */
   --ua-z-three: 5;        /* canvas Three.js sobre Cesium */

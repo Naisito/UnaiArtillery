@@ -1,5 +1,5 @@
 // ============================================================================
-//  ForwardObserver.ts — Reto de Observador Avanzado.  [P-VIVO.6]
+//  ForwardObserver.ts — Reto de Observador Avanzado.  [P-VIVO.6 · V2]
 //
 //  La esencia de la artillería: NO ves el objetivo desde el arma — lo ve un
 //  observador (FO) que canta correcciones ("derecha 50, largo 100"). El reto:
@@ -9,34 +9,41 @@
 //      perfil OP→objetivo (si el relieve bloquea, reintenta acercándose);
 //    * cámara CLAVADA en el OP a 1.7 m del suelo (modo 'op': girar/zoom, sin
 //      moverse), parábola forzada OFF, elipse PER y marcador de impacto
-//      previsto OCULTOS, 🎯 desactivado — nada de chivatos;
+//      previsto OCULTOS, designación desactivada — nada de chivatos;
 //    * correcciones ±25/±50/±100 m en los ejes de LA LÍNEA OP→OBJETIVO
 //      (foCore, pura y testeada) que trasladan el punto de puntería y
 //      re-resuelven la dirección de tiro;
 //    * puntúa por RONDAS gastadas hasta impactar a <50 m (1=★★★, 2-3=★★,
 //      4-6=★); récord por arma en localStorage 'unai-artillery/challenge-fo/v1'.
 //
-//  El boom que llega tarde de verdad ya lo regala AudioBoom: la distancia
-//  cámara(OP)→impacto manda el retardo físico.
+//  V2: tarjeta de misión en la pestaña INSTRUCCIÓN y panel de corrección
+//  flotante (#foPanel) en el mismo lenguaje visual.
 // ============================================================================
 import { Vec3 } from '../ballistics';
 import { buildTerrain } from '../ballistics/WorkerProtocol';
 import { BallisticsService } from '../BallisticsService';
+import { button, setButtonLabel } from './components';
 import { pickTargetInRing } from './challengeCore';
 import { ControlPanel } from './ControlPanel';
+import { h, setText } from './dom';
 import {
   FO_HIT_RADIUS_M, FoRecord, applyObserverCorrection, foStars, hasLineOfSight,
   improveFoRecord, opCandidates,
 } from './foCore';
+import { icon } from './icons';
+import { MissionCard, missionCard } from './missionCard';
 import { loadRecords, saveRecords } from './recordStore';
+import { settings } from './settings';
 import { toast } from './toast';
+import { fmtAngle, fmtNum } from './units';
+import { WEAPON_INFO } from './weaponInfo';
 
 const STORE_KEY = 'unai-artillery/challenge-fo/v1';
 
 export interface ForwardObserverHooks {
   /** Marca la diana (reutiliza el marcador dorado del reto clásico). */
   marker(enu: Vec3 | null): void;
-  /** Bloquea/desbloquea 🎯 Objetivo. */
+  /** Bloquea/desbloquea la designación en el mapa. */
   lockPick(locked: boolean): void;
   schedulePreview(): void;
   /** Fuerza la parábola de preview ON/OFF (se restaura al salir). */
@@ -57,40 +64,35 @@ export class ForwardObserver {
   /** Estado de la parábola ANTES del reto (para restaurarla de verdad). */
   private savedArc: boolean | null = null;
 
-  private startBtn!: HTMLButtonElement;
-  private surrenderBtn!: HTMLButtonElement;
-  private statusEl!: HTMLElement;
+  private readonly card: MissionCard;
+  private readonly startBtn: HTMLButtonElement;
+  private readonly surrenderBtn: HTMLButtonElement;
   private corrPanel!: HTMLElement;
   private corrStatus!: HTMLElement;
+  private roundsEl!: HTMLElement;
 
   constructor(
     private readonly service: BallisticsService,
     private readonly panel: ControlPanel,
     private readonly hooks: ForwardObserverHooks,
+    host: HTMLElement = document.getElementById('instructionHost') ?? document.body,
   ) {
-    // Botonera dentro de la sección "Instrucción" (creada por Challenge).
-    const host =
-      document.getElementById('instructionHost') ?? document.getElementById('controlPanel')!;
-    const row = document.createElement('div');
-    row.className = 'btn-grid';
-    this.startBtn = document.createElement('button');
-    this.startBtn.textContent = '🔭 Reto FO';
-    this.startBtn.title =
-      'Observador avanzado: solo ves el mundo desde un cerro y corriges el tiro como se hace de verdad';
-    this.startBtn.onclick = () => void this.start();
-    this.surrenderBtn = document.createElement('button');
-    this.surrenderBtn.textContent = 'Rendirse';
-    this.surrenderBtn.title = 'Revela el objetivo y la solución (no puntúa)';
-    this.surrenderBtn.style.display = 'none';
-    this.surrenderBtn.onclick = () => void this.surrender();
-    row.append(this.startBtn, this.surrenderBtn);
-    host.appendChild(row);
-
-    this.statusEl = document.createElement('p');
-    this.statusEl.className = 'hint';
-    host.appendChild(this.statusEl);
+    this.card = missionCard({
+      icon: 'binoculars', tag: 'Observación', title: 'Observador avanzado', testid: 'mission-fo', gloss: 'fo',
+      desc: 'Solo ves el mundo desde un cerro con línea de visión al objetivo. Corrige como se hace de verdad: derecha/izquierda y largo/corto sobre TU línea de visión. Puntúan las rondas gastadas.',
+    });
+    this.startBtn = button({
+      label: 'Iniciar reto FO', icon: 'play', variant: 'primary', size: 's', testid: 'fo-start',
+      onClick: () => void this.start(),
+    });
+    this.surrenderBtn = button({
+      label: 'Rendirse', size: 's', variant: 'ghost', testid: 'fo-surrender',
+      title: 'Revela el objetivo y la solución (no puntúa)', onClick: () => void this.surrender(),
+    });
+    this.surrenderBtn.hidden = true;
+    this.card.actions.append(this.startBtn, this.surrenderBtn);
+    host.appendChild(this.card.el);
     this.showRecord();
-
     this.buildCorrectionPanel();
   }
 
@@ -98,51 +100,42 @@ export class ForwardObserver {
 
   // -- Panel de correcciones (flota abajo-centro solo durante el reto) --------
   private buildCorrectionPanel(): void {
-    this.corrPanel = document.createElement('div');
-    this.corrPanel.id = 'foPanel';
-    this.corrPanel.className = 'panel';
-    this.corrPanel.style.display = 'none';
-
-    const title = document.createElement('h2');
-    title.textContent = '🔭 Corrección del observador';
-    this.corrPanel.appendChild(title);
-
-    const mkRow = (
-      label: string, negLabel: string, posLabel: string,
-      apply: (m: number) => void,
-    ) => {
-      const row = document.createElement('div');
-      row.className = 'row fo-row';
-      const lab = document.createElement('label');
-      lab.textContent = label;
-      row.appendChild(lab);
-      for (const m of [-100, -50, -25]) {
-        row.appendChild(this.corrButton(`${negLabel} ${-m}`, () => apply(m)));
-      }
-      for (const m of [25, 50, 100]) {
-        row.appendChild(this.corrButton(`${posLabel} ${m}`, () => apply(m)));
-      }
-      return row;
+    this.roundsEl = h('span', { class: 'fo-rounds num' });
+    this.corrStatus = h('p', { class: 'fo-status', attrs: { role: 'status' } });
+    const row = (label: string, gloss: string, neg: string, pos: string, apply: (m: number) => void) => {
+      const r = h('div', { class: 'fo-row' },
+        h('span', { class: 'fo-row__label', text: label, dataset: { gloss } }),
+      );
+      const negGroup = h('div', { class: 'fo-group fo-group--neg' });
+      for (const m of [100, 50, 25]) negGroup.appendChild(this.corrButton(`${neg} ${m}`, `fo-${neg.toLowerCase()}-${m}`, () => apply(-m)));
+      const posGroup = h('div', { class: 'fo-group fo-group--pos' });
+      for (const m of [25, 50, 100]) posGroup.appendChild(this.corrButton(`${pos} ${m}`, `fo-${pos.toLowerCase()}-${m}`, () => apply(m)));
+      r.append(negGroup, h('span', { class: 'fo-row__axis' }), posGroup);
+      return r;
     };
-    // "Derecha/izquierda" y "largo/corto" SIEMPRE sobre la línea OP→objetivo.
-    this.corrPanel.appendChild(mkRow('Deriva', '◀', '▶', (m) => void this.correct(m, 0)));
-    this.corrPanel.appendChild(mkRow('Alcance', '−', '+', (m) => void this.correct(0, m)));
-
-    this.corrStatus = document.createElement('p');
-    this.corrStatus.className = 'hint';
-    this.corrStatus.textContent =
-      'Dispara, observa el impacto desde el OP y corrige. El boom tarda lo que tarda el sonido.';
-    this.corrPanel.appendChild(this.corrStatus);
-
+    this.corrPanel = h('div', { id: 'foPanel', testid: 'fo-panel', attrs: { role: 'region', 'aria-label': 'Corrección del observador' } },
+      h('header', { class: 'fo-head' },
+        h('span', { class: 'fo-head__icon' }, icon('binoculars', 18)),
+        h('div', { class: 'fo-head__titles' },
+          h('span', { class: 'ua-eyebrow', text: 'Observador avanzado' }),
+          h('span', { class: 'fo-head__title', text: 'Corrección del tiro' }),
+        ),
+        h('div', { class: 'fo-head__rounds' }, h('span', { class: 'ua-eyebrow', text: 'Rondas' }), this.roundsEl),
+      ),
+      // "Derecha/izquierda" y "largo/corto" SIEMPRE sobre la línea OP→objetivo.
+      row('Dirección', 'fo', 'Izq', 'Der', (m) => void this.correct(m, 0)),
+      row('Alcance', 'fo', 'Corto', 'Largo', (m) => void this.correct(0, m)),
+      this.corrStatus,
+    );
+    this.corrPanel.hidden = true;
     document.body.appendChild(this.corrPanel);
   }
 
-  private corrButton(label: string, onClick: () => void): HTMLButtonElement {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.onclick = onClick;
-    return b;
+  private corrButton(label: string, testid: string, onClick: () => void): HTMLButtonElement {
+    return h('button', { class: 'fo-btn num', testid, attrs: { type: 'button' }, on: { click: onClick } }, label);
   }
+
+  private setCorrStatus(text: string): void { setText(this.corrStatus, text); }
 
   // -- Ciclo del reto -----------------------------------------------------------
   private async start(): Promise<void> {
@@ -169,9 +162,7 @@ export class ForwardObserver {
       const candidates = opCandidates(Math.random, { x: target.x, y: target.y });
       let op: Vec3 | null = null;
       for (const c of candidates) {
-        const profile = await this.service.sampleLineProfile(
-          new Vec3(c.x, c.y, 0), target, 120,
-        );
+        const profile = await this.service.sampleLineProfile(new Vec3(c.x, c.y, 0), target, 120);
         if (hasLineOfSight(profile)) {
           op = new Vec3(c.x, c.y, profile[0]);
           break;
@@ -180,8 +171,8 @@ export class ForwardObserver {
       }
       if (!op) throw new Error('sin candidatos de OP');
 
-      // Si el usuario cambió de arma/carga durante el planteo (awaits de
-      // terreno/LOS), este reto es del arma anterior: abortar en silencio.
+      // Si el usuario cambió de arma/carga durante el planteo, este reto es
+      // del arma anterior: abortar en silencio.
       if (this.panel.weaponId !== weaponAtStart || this.panel.chargeIndex !== chargeAtStart) {
         return;
       }
@@ -200,9 +191,10 @@ export class ForwardObserver {
       this.opPos = op;
       this.rounds = 0;
       this.scored = false;
+      setText(this.roundsEl, '0');
 
-      // Sin chivatos: parábola OFF, 🎯 bloqueado; el marcador de la diana SÍ
-      // se pinta (el FO tiene que VER su objetivo para corregir).
+      // Sin chivatos: parábola OFF, designación bloqueada; el marcador de la
+      // diana SÍ se pinta (el FO tiene que VER su objetivo para corregir).
       this.hooks.marker(target);
       this.hooks.lockPick(true);
       this.savedArc = this.panel.arcChecked; // restaurar EXACTAMENTE esto al salir
@@ -214,17 +206,18 @@ export class ForwardObserver {
       // observador solo corrige lo que ve).
       await this.solveToAim();
 
-      this.surrenderBtn.style.display = '';
-      this.startBtn.textContent = '🔭 Otro reto FO';
-      this.corrPanel.style.display = '';
+      this.surrenderBtn.hidden = false;
+      setButtonLabel(this.startBtn, 'Otro objetivo');
+      this.card.setLive(true);
+      this.corrPanel.hidden = false;
+      document.body.classList.add('fo-active');
       const dTO = Math.hypot(target.x - op.x, target.y - op.y);
-      this.statusEl.textContent =
-        `FO desplegado a ${(dTO / 1000).toFixed(1)} km del objetivo. ` +
-        'Corrige con el panel 🔭 y dispara: puntúan las rondas gastadas.';
-      toast('🔭 Reto FO: observa desde el cerro, corrige y bate el objetivo (<50 m)');
+      this.card.setStatus(
+        `Observador a ${(dTO / 1000).toFixed(1)} km del objetivo. Corrige con el panel inferior y dispara: puntúan las rondas.`);
+      toast('Observa desde el cerro, corrige y bate el objetivo a menos de 50 m', { title: 'Reto FO' });
     } catch (err) {
       console.error('[fo]', err);
-      toast('No se pudo plantear el reto FO');
+      toast('No se pudo plantear el reto FO', { level: 'error' });
       this.endInternal();
     } finally {
       this.startBtn.disabled = false;
@@ -244,7 +237,7 @@ export class ForwardObserver {
     const dir = rightM !== 0
       ? (rightM > 0 ? `derecha ${rightM}` : `izquierda ${-rightM}`)
       : (addM > 0 ? `largo ${addM}` : `corto ${-addM}`);
-    this.corrStatus.textContent = `Corrección "${dir}" aplicada — resolviendo tiro…`;
+    this.setCorrStatus(`Corrección "${dir}" aplicada — resolviendo tiro…`);
     await this.solveToAim();
   }
 
@@ -256,17 +249,16 @@ export class ForwardObserver {
         this.panel.weaponId, this.aimPoint, this.panel.chargeIndex, this.panel.preferHighAngle,
       );
       if (!sol.found) {
-        this.corrStatus.textContent =
-          'El punto corregido queda FUERA de alcance — corrige en corto o cambia de carga.';
+        this.setCorrStatus('El punto corregido queda FUERA de alcance — corrige en corto o cambia de carga.');
         return;
       }
       this.panel.setAim(sol.azimuthDeg, sol.elevationDeg);
       this.hooks.schedulePreview();
-      this.corrStatus.textContent =
-        `Solución lista (az ${sol.azimuthDeg.toFixed(1)}º · QE ${sol.elevationDeg.toFixed(2)}º). ¡Fuego!`;
+      const u = settings.angleUnit;
+      this.setCorrStatus(`Solución lista: AZ ${fmtAngle(sol.azimuthDeg, u)} · QE ${fmtAngle(sol.elevationDeg, u)}. ¡Fuego!`);
     } catch (err) {
       console.error('[fo-solve]', err);
-      this.corrStatus.textContent = 'Fallo resolviendo el tiro — reintenta la corrección.';
+      this.setCorrStatus('Fallo resolviendo el tiro — reintenta la corrección.');
     }
   }
 
@@ -274,10 +266,10 @@ export class ForwardObserver {
   notifyImpact(impactEnu: Vec3): void {
     if (!this.active || !this.target) return;
     this.rounds++;
+    setText(this.roundsEl, String(this.rounds));
     const missM = Math.hypot(impactEnu.x - this.target.x, impactEnu.y - this.target.y);
     if (missM >= FO_HIT_RADIUS_M) {
-      this.corrStatus.textContent =
-        `Ronda ${this.rounds}: fallo de ${missM.toFixed(0)} m — observa dónde levantó y corrige.`;
+      this.setCorrStatus(`Ronda ${this.rounds}: fallo de ${fmtNum(missM, 0)} m — observa dónde levantó y corrige.`);
       return;
     }
 
@@ -291,13 +283,11 @@ export class ForwardObserver {
     records[this.panel.weaponId] = record;
     saveRecords(STORE_KEY, records);
 
-    const bar = '★★★'.slice(0, stars).padEnd(3, '☆');
-    toast(`${bar} — objetivo batido en ${this.rounds} ronda${this.rounds === 1 ? '' : 's'}` +
-      (improved ? ' · ¡RÉCORD!' : ''));
-    this.statusEl.textContent =
-      `${bar} batido en ${this.rounds} ronda${this.rounds === 1 ? '' : 's'}` +
-      (improved ? ' · ¡récord nuevo!' : ` · récord ${record.bestRounds}`) +
-      ' — 🔭 para otro reto.';
+    const rondas = `${this.rounds} ronda${this.rounds === 1 ? '' : 's'}`;
+    toast(`Objetivo batido en ${rondas} — ${stars} estrella${stars === 1 ? '' : 's'}${improved ? ' · nuevo récord' : ''}`, {
+      level: 'success', title: 'Reto FO',
+    });
+    this.card.setStatus(`Batido en ${rondas}` + (improved ? ' — ¡récord nuevo!' : ` (récord ${record.bestRounds})`));
     this.endInternal();
   }
 
@@ -310,9 +300,8 @@ export class ForwardObserver {
       );
       if (sol.found) {
         this.panel.setAim(sol.azimuthDeg, sol.elevationDeg);
-        this.statusEl.textContent =
-          `Solución real: az ${sol.azimuthDeg.toFixed(1)}º · QE ${sol.elevationDeg.toFixed(2)}º. ` +
-          'Sin puntuar — 🔭 para otro reto.';
+        const u = settings.angleUnit;
+        this.card.setStatus(`Solución real: AZ ${fmtAngle(sol.azimuthDeg, u)} · QE ${fmtAngle(sol.elevationDeg, u)}. Sin puntuar.`);
       }
     } catch (err) {
       console.error('[fo]', err);
@@ -332,9 +321,11 @@ export class ForwardObserver {
     this.target = null;
     this.opPos = null;
     this.aimPoint = null;
-    this.corrPanel.style.display = 'none';
-    this.surrenderBtn.style.display = 'none';
-    this.startBtn.textContent = '🔭 Reto FO';
+    this.corrPanel.hidden = true;
+    document.body.classList.remove('fo-active');
+    this.surrenderBtn.hidden = true;
+    this.card.setLive(false);
+    setButtonLabel(this.startBtn, 'Iniciar reto FO');
     if (wasActive) {
       this.hooks.marker(null);
       this.hooks.lockPick(false);
@@ -344,16 +335,18 @@ export class ForwardObserver {
       this.hooks.exitOpCamera();
     }
     this.savedArc = null;
+    this.showRecordLine();
+  }
+
+  private showRecordLine(): void {
+    const name = WEAPON_INFO[this.panel.weaponId].designation;
+    const rec = loadRecords<FoRecord>(STORE_KEY)[this.panel.weaponId];
+    this.card.setRecord(rec ? rec.stars : null,
+      rec ? `${rec.bestRounds} ronda${rec.bestRounds === 1 ? '' : 's'} · ${name}` : `sin récord con ${name}`);
   }
 
   private showRecord(): void {
-    const rec = loadRecords<FoRecord>(STORE_KEY)[this.panel.weaponId];
-    if (rec) {
-      const bar = '★★★'.slice(0, rec.stars).padEnd(3, '☆');
-      this.statusEl.textContent =
-        `Récord FO con esta arma: ${bar} en ${rec.bestRounds} ronda${rec.bestRounds === 1 ? '' : 's'}.`;
-    } else {
-      this.statusEl.textContent = 'Reto FO: corrige el tiro desde un puesto de observación.';
-    }
+    this.showRecordLine();
+    this.card.setStatus('');
   }
 }

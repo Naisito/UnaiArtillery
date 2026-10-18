@@ -1,28 +1,33 @@
 // ============================================================================
-//  FiringTablePanel.ts — Tabla de tiro interactiva.  [P-PRO.5]
+//  FiringTablePanel.ts — Pestaña TABLA DE TIRO.  [P-PRO.5 · rediseño V2]
 //
-//  La clase de dirección de tiro: para el arma/carga/meteo ACTUALES, tabula
-//  alcance → QE baja/alta, TOF y deriva. Clic en una fila = apuntar ahí
-//  (setAim con el azimut vigente + preview). La fila más próxima al alcance
-//  del preview vigente queda resaltada. El cálculo corre en el worker: el
-//  globo sigue fluido y mientras tanto se lee "calculando…". Botón CSV
-//  descarga la tabla completa (firingTableCSV).
+//  Para el arma/munición/carga/meteo ACTUALES tabula alcance → QE de rama
+//  baja y alta (en la unidad angular del usuario), TOF y deriva (giro +
+//  Coriolis + viento). Clic en una fila = apuntar ahí con el azimut vigente
+//  y la rama preferida. La fila más próxima al alcance del preview queda
+//  resaltada (y se desplaza a la vista). Solo calcula con la pestaña visible;
+//  el cálculo corre en el worker y CSV descarga la tabla completa.
 // ============================================================================
 import { FiringTable, FiringTableRow, firingTableCSV } from '../ballistics';
 import { BallisticsService, SupersededError } from '../BallisticsService';
-import { ControlPanel } from './ControlPanel';
+import { button, chip, setChip } from './components';
+import { chargeLong, ControlPanel } from './ControlPanel';
+import { h, setText } from './dom';
+import { RightDock } from './RightDock';
+import { settings } from './settings';
 import { toast } from './toast';
+import { UNIT_SUFFIX, fmtAngleValue, fmtNum } from './units';
 
 export class FiringTablePanel {
-  private readonly root: HTMLElement;
-  private readonly body: HTMLElement;
   private readonly headEl: HTMLElement;
+  private readonly metaEl: HTMLElement;
+  private readonly stateChip: HTMLElement;
   private readonly statusEl: HTMLElement;
   private readonly scrollEl: HTMLElement;
   private readonly csvBtn: HTMLButtonElement;
-  private readonly toggleBtn: HTMLButtonElement;
 
   private open = false;
+  private dirty = true;
   private table: FiringTable | null = null;
   private previewRangeM: number | null = null;
   private fetchSeq = 0;
@@ -31,69 +36,65 @@ export class FiringTablePanel {
     private readonly service: BallisticsService,
     private readonly panel: ControlPanel,
     private readonly schedulePreview: () => void,
+    host: HTMLElement,
   ) {
-    this.root = document.createElement('aside');
-    this.root.id = 'firingTable';
-    this.root.className = 'panel';
-    document.body.appendChild(this.root);
-
-    this.toggleBtn = document.createElement('button');
-    this.toggleBtn.className = 'wide';
-    this.toggleBtn.textContent = '📋 Tabla de tiro';
-    this.toggleBtn.title = 'Alcance → QE baja/alta, TOF y deriva con la meteo actual';
-    this.toggleBtn.onclick = () => this.setOpen(!this.open);
-    this.root.appendChild(this.toggleBtn);
-
-    this.body = document.createElement('div');
-    this.body.className = 'ft-body';
-    this.body.hidden = true;
-
-    this.headEl = document.createElement('div');
-    this.headEl.className = 'ft-head';
-
-    this.csvBtn = document.createElement('button');
-    this.csvBtn.textContent = 'CSV';
-    this.csvBtn.title = 'Descargar la tabla completa como CSV';
-    this.csvBtn.onclick = () => this.downloadCSV();
-
-    const headRow = document.createElement('div');
-    headRow.className = 'row';
-    headRow.append(this.headEl, this.csvBtn);
-    this.body.appendChild(headRow);
-
-    this.statusEl = document.createElement('p');
-    this.statusEl.className = 'hint';
-    this.body.appendChild(this.statusEl);
-
-    this.scrollEl = document.createElement('div');
-    this.scrollEl.className = 'ft-scroll';
-    this.body.appendChild(this.scrollEl);
-
-    this.root.appendChild(this.body);
+    host.textContent = '';
+    this.csvBtn = button({
+      label: 'CSV', icon: 'download', size: 's', testid: 'table-csv',
+      title: 'Descargar la tabla completa como CSV', onClick: () => this.downloadCSV(),
+    });
+    this.stateChip = chip('—', 'muted');
+    this.headEl = h('div', { class: 'ft-title' });
+    this.metaEl = h('div', { class: 'ft-meta' });
+    this.statusEl = h('p', { class: 'met-note' });
+    this.scrollEl = h('div', { class: 'ft-scroll', testid: 'firing-table' });
+    host.append(
+      RightDock.header('Tabla de tiro', this.stateChip, this.csvBtn),
+      h('div', { class: 'rpanel-body ft-body' },
+        h('div', { class: 'ft-card' }, this.headEl, this.metaEl),
+        this.scrollEl,
+        this.statusEl,
+      ),
+    );
+    settings.subscribe((_s, changed) => {
+      if (changed.includes('angleUnit') && this.table) this.render();
+    });
   }
 
-  private setOpen(open: boolean): void {
-    this.open = open;
-    this.body.hidden = !open;
-    this.toggleBtn.classList.toggle('toggled', open);
-    if (open) void this.refresh();
+  /** La pestaña se ve / deja de verse: solo se calcula a la vista. */
+  setVisible(visible: boolean): void {
+    this.open = visible;
+    if (visible && this.dirty) void this.refresh();
   }
 
   /** El alcance del preview vigente (resalta la fila más próxima). */
   setPreviewRange(rangeM: number): void {
     this.previewRangeM = rangeM;
-    if (this.open && this.table) this.highlight();
+    if (this.open && this.table) this.highlight(true);
+  }
+
+  /** La rama preferida cambió: resalta su columna. */
+  onBranchChanged(): void {
+    if (!this.table) return;
+    this.render();
+    this.highlight(false);
   }
 
   /** Cambió arma/munición/carga/meteo/batería: re-pide (la caché abarata). */
   notifyChanged(): void {
+    this.dirty = true;
     if (this.open) void this.refresh();
   }
 
   private async refresh(): Promise<void> {
     const seq = ++this.fetchSeq;
-    this.statusEl.textContent = 'calculando…';
+    this.dirty = false;
+    setChip(this.stateChip, 'Calculando', 'info');
     this.csvBtn.disabled = true;
+    if (!this.table) {
+      setText(this.headEl, 'Calculando la tabla de tiro…');
+      setText(this.statusEl, 'El núcleo balístico integra cada alcance con la meteo vigente (en segundo plano).');
+    }
     try {
       const id = this.panel.weaponId;
       const charge = this.panel.chargeIndex;
@@ -106,16 +107,18 @@ export class FiringTablePanel {
         this.table = table;
         this.render();
       }
-      this.statusEl.textContent =
-        `Paso ${stepM} m · deriva = spin + Coriolis + viento actual. Clic en una fila para apuntar.`;
+      setChip(this.stateChip, 'Vigente', 'ok');
+      setText(this.statusEl,
+        `Paso ${fmtNum(stepM)} m · deriva = giro + Coriolis + viento actual (+ derecha). ` +
+        'Clic en una fila para apuntar con la rama elegida.');
       this.csvBtn.disabled = false;
-      this.highlight();
+      this.highlight(true);
     } catch (err) {
       if ((err as Error)?.name === 'SupersededError' || err instanceof SupersededError) return;
       console.error('[firing-table]', err);
       if (seq === this.fetchSeq) {
-        this.statusEl.textContent = 'No se pudo calcular la tabla.';
-        // La tabla anterior sigue renderizada: su CSV sigue siendo válido.
+        setChip(this.stateChip, 'Error', 'danger');
+        setText(this.statusEl, 'No se pudo calcular la tabla.');
         this.csvBtn.disabled = this.table === null;
       }
     }
@@ -123,54 +126,63 @@ export class FiringTablePanel {
 
   private render(): void {
     const t = this.table;
-    this.scrollEl.innerHTML = '';
+    this.scrollEl.textContent = '';
     if (!t) return;
-    this.headEl.textContent =
-      `${t.weaponName} · ${t.chargeName} · V0 ${t.muzzleVelocity.toFixed(0)} m/s · ` +
-      `máx ${(t.maxRangeM / 1000).toFixed(1)} km`;
+    const unit = settings.angleUnit;
+    const suf = UNIT_SUFFIX[unit];
+    setText(this.headEl, t.weaponName);
+    this.metaEl.textContent = '';
+    const meta = (k: string, v: string) => h('span', { class: 'ft-meta__item' }, h('span', { class: 'ua-eyebrow', text: k }), h('span', { class: 'num', text: v }));
+    this.metaEl.append(
+      meta('Carga', chargeLong(t.chargeName)),
+      meta('V0', `${t.muzzleVelocity.toFixed(0)} m/s`),
+      meta('Alcance máx.', `${(t.maxRangeM / 1000).toFixed(1)} km`),
+    );
 
-    const tbl = document.createElement('table');
-    tbl.className = 'ft-table';
-    const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    for (const h of ['Alcance', 'QE↓', 'QE↑', 'TOF', 'Deriva']) {
-      const th = document.createElement('th');
-      th.textContent = h;
-      hr.appendChild(th);
-    }
-    thead.appendChild(hr);
+    const high = this.panel.preferHighAngle;
+    const tbl = h('table', { class: 'ft-table' });
+    const thead = h('thead', null, h('tr', null,
+      h('th', { text: 'Alcance' }),
+      h('th', { class: high ? '' : 'is-branch', text: `QE baja` }),
+      h('th', { class: high ? 'is-branch' : '', text: `QE alta` }),
+      h('th', { text: 'TOF' }),
+      h('th', { text: 'Deriva' }),
+    ));
+    const unitRow = h('tr', { class: 'ft-units' },
+      h('th', { text: 'km' }), h('th', { text: suf }), h('th', { text: suf }), h('th', { text: 's' }), h('th', { text: 'm' }),
+    );
+    thead.appendChild(unitRow);
     tbl.appendChild(thead);
-
-    const tbody = document.createElement('tbody');
-    const fmt = (v: number | null, digits: number, unit = ''): string =>
-      v === null ? '—' : `${v.toFixed(digits)}${unit}`;
+    const tbody = h('tbody');
+    const ang = (v: number | null) => (v === null ? '—' : fmtAngleValue(v, unit, unit === 'mil' ? 0 : 2).replace(' ', ''));
     for (const row of t.rows) {
-      const tr = document.createElement('tr');
-      tr.dataset.rangeM = String(row.rangeM);
       const tof = row.tofLowS ?? row.tofHighS;
       const drift = row.driftLowM ?? row.driftHighM;
-      for (const cell of [
-        `${(row.rangeM / 1000).toFixed(1)} km`,
-        fmt(row.qeLowDeg, 1, 'º'),
-        fmt(row.qeHighDeg, 1, 'º'),
-        fmt(tof, 1, ' s'),
-        fmt(drift, 0, ' m'),
-      ]) {
-        const td = document.createElement('td');
-        td.textContent = cell;
-        tr.appendChild(td);
-      }
+      const tr = h('tr', { dataset: { rangeM: String(row.rangeM) } },
+        h('td', { text: (row.rangeM / 1000).toFixed(1) }),
+        h('td', { class: high ? '' : 'is-branch', text: ang(row.qeLowDeg) }),
+        h('td', { class: high ? 'is-branch' : '', text: ang(row.qeHighDeg) }),
+        h('td', { text: tof === null ? '—' : tof.toFixed(1) }),
+        h('td', { text: drift === null ? '—' : `${drift >= 0 ? '+' : '−'}${Math.abs(drift).toFixed(0)}` }),
+      );
       if (row.qeLowDeg !== null || row.qeHighDeg !== null) {
         tr.classList.add('aimable');
-        tr.title = 'Apuntar a este alcance (rama según "Rama alta") al azimut actual';
-        tr.onclick = () => {
-          // La QE se decide AL CLICAR, no al renderizar: si el usuario cambió
-          // "Rama alta" con la tabla abierta, manda la preferencia vigente.
+        tr.tabIndex = 0;
+        tr.title = 'Apuntar a este alcance con el azimut actual';
+        const aim = () => {
+          // La QE se decide AL CLICAR, no al renderizar: manda la rama vigente.
           const qe = this.rowQE(row);
           if (qe === null) return;
           this.panel.setAim(this.panel.azimuthDeg, qe);
           this.schedulePreview();
         };
+        tr.addEventListener('click', aim);
+        tr.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            aim();
+          }
+        });
       }
       tbody.appendChild(tr);
     }
@@ -185,7 +197,7 @@ export class FiringTablePanel {
       : row.qeLowDeg ?? row.qeHighDeg;
   }
 
-  private highlight(): void {
+  private highlight(scroll: boolean): void {
     if (!this.table || this.previewRangeM === null) return;
     let best: HTMLTableRowElement | null = null;
     let bestErr = Number.POSITIVE_INFINITY;
@@ -194,7 +206,10 @@ export class FiringTablePanel {
       const err = Math.abs(Number(tr.dataset.rangeM) - this.previewRangeM);
       if (err < bestErr) { bestErr = err; best = tr; }
     }
-    best?.classList.add('current');
+    if (best) {
+      best.classList.add('current');
+      if (scroll) best.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   private downloadCSV(): void {
@@ -205,6 +220,6 @@ export class FiringTablePanel {
     a.download = `tabla_${this.table.weaponName.replace(/\W+/g, '_')}_${this.table.chargeName.replace(/\W+/g, '_')}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast('Tabla de tiro descargada (CSV)');
+    toast('Tabla de tiro descargada (CSV)', { level: 'success' });
   }
 }

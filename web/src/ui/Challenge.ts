@@ -1,13 +1,17 @@
 // ============================================================================
-//  Challenge.ts — Modo instrucción: reto de puntería puntuado.  [P-PRO.7]
+//  Challenge.ts — Instrucción: reto de precisión y blanco móvil.
+//  [P-PRO.7 · P-VIVO.7 · tarjetas de misión V2]
 //
-//  "🏅 Reto" planta una diana aleatoria en el anillo [0.4, 0.9]·alcanceMáx del
-//  arma/carga actual, A LA ALTURA real del suelo, y desactiva la solución
-//  automática (🎯 Objetivo). Se apunta a mano: sliders, cockpit o tabla de
-//  tiro. El PRIMER impacto puntúa por fallo radial (3★ <25 m · 2★ <75 m ·
-//  1★ <150 m, ver challengeCore) y el récord por arma persiste en
-//  localStorage ('unai-artillery/challenge/v1'). "Rendirse" revela la
-//  solución vía solveForTarget y no puntúa.
+//  RETO DE PRECISIÓN: diana aleatoria en el anillo [0.4, 0.9]·alcanceMáx del
+//  arma/carga actual, A LA ALTURA real del suelo; la designación en el mapa
+//  queda bloqueada y se apunta a mano (deslizadores, instrumentos o tabla de
+//  tiro). El PRIMER impacto puntúa por fallo radial (3★ <25 m · 2★ <75 m ·
+//  1★ <150 m, ver challengeCore) con récord por arma en localStorage
+//  ('unai-artillery/challenge/v1'). "Rendirse" revela la solución.
+//
+//  BLANCO MÓVIL: un camión a 20-60 km/h; el impacto se puntúa contra dónde
+//  está el camión CUANDO EL TIRO CAE. El "Adelanto sugerido" pinta un
+//  fantasma extrapolado al TOF del preview.
 //
 //  La lógica pura (anillo, estrellas, récords) vive en challengeCore.ts con
 //  RNG inyectado; la semilla del reloj entra SOLO aquí.
@@ -15,12 +19,17 @@
 import { Vec3 } from '../ballistics';
 import { buildTerrain } from '../ballistics/WorkerProtocol';
 import { BallisticsService } from '../BallisticsService';
+import { Toggle, button, setButtonLabel } from './components';
 import { ControlPanel } from './ControlPanel';
 import {
-  ChallengeRecord, improveRecord, pickTargetInRing, starBar, starsForMiss,
+  ChallengeRecord, improveRecord, pickTargetInRing, starsForMiss,
 } from './challengeCore';
+import { MissionCard, missionCard } from './missionCard';
 import { loadRecords, saveRecords } from './recordStore';
+import { settings } from './settings';
 import { toast } from './toast';
+import { fmtAngle, fmtNum } from './units';
+import { WEAPON_INFO } from './weaponInfo';
 
 const STORE_KEY = 'unai-artillery/challenge/v1';
 const MOVING_STORE_KEY = 'unai-artillery/challenge-moving/v1';
@@ -29,7 +38,7 @@ const GHOST_PREF_KEY = 'unai-artillery/moving-ghost/v1';
 export interface ChallengeHooks {
   /** Pinta/borra la diana del reto (distinta del objetivo normal). */
   marker(enu: Vec3 | null): void;
-  /** Bloquea/desbloquea la solución automática (🎯 Objetivo). */
+  /** Bloquea/desbloquea la solución automática (designar en el mapa). */
   lockPick(locked: boolean): void;
   schedulePreview(): void;
   /** P-VIVO.6 — un reto arranca: los otros modos (FO…) deben cancelarse. */
@@ -42,71 +51,67 @@ export interface ChallengeHooks {
   movingPosition?(): Vec3 | null;
 }
 
+const starsText = (n: number) => `${n} estrella${n === 1 ? '' : 's'}`;
+
 export class Challenge {
   private target: Vec3 | null = null;
   private surrendered = false;
   private scored = false;
   /** P-VIVO.7 — 'moving' puntúa contra la posición del blanco al impactar. */
   private mode: 'static' | 'moving' = 'static';
-  private startBtn!: HTMLButtonElement;
-  private movingBtn!: HTMLButtonElement;
-  private surrenderBtn!: HTMLButtonElement;
-  private statusEl!: HTMLElement;
-  private ghostCheckbox!: HTMLInputElement;
+  private readonly staticCard: MissionCard;
+  private readonly movingCard: MissionCard;
+  private readonly startBtn: HTMLButtonElement;
+  private readonly movingBtn: HTMLButtonElement;
+  private readonly surrenderStatic: HTMLButtonElement;
+  private readonly surrenderMoving: HTMLButtonElement;
+  private readonly ghost: Toggle;
 
   constructor(
     private readonly service: BallisticsService,
     private readonly panel: ControlPanel,
     private readonly hooks: ChallengeHooks,
+    host: HTMLElement = document.getElementById('instructionHost') ?? document.body,
   ) {
-    // Se monta en el anfitrión de Instrucción (junto a la operación del
-    // arma); si no existiera, cae al panel entero como antes.
-    const host =
-      document.getElementById('instructionHost') ?? document.getElementById('controlPanel')!;
-    const h3 = document.createElement('h3');
-    h3.textContent = 'Instrucción';
-    host.appendChild(h3);
+    // -- Reto de precisión -------------------------------------------------------
+    this.staticCard = missionCard({
+      icon: 'target', tag: 'Puntería', title: 'Reto de precisión', testid: 'mission-static',
+      desc: 'Diana aleatoria dentro de tu envolvente. Sin designación automática: apunta a mano y puntúa el PRIMER impacto (3 estrellas < 25 m).',
+    });
+    this.startBtn = button({
+      label: 'Iniciar reto', icon: 'play', variant: 'primary', size: 's', id: 'challengeBtn', testid: 'challenge-start',
+      onClick: () => void this.start(),
+    });
+    this.surrenderStatic = button({
+      label: 'Rendirse', size: 's', variant: 'ghost', testid: 'challenge-surrender',
+      title: 'Revela la solución (no puntúa)', onClick: () => void this.surrender(),
+    });
+    this.surrenderStatic.hidden = true;
+    this.staticCard.actions.append(this.startBtn, this.surrenderStatic);
 
-    const row = document.createElement('div');
-    row.className = 'btn-grid';
-    this.startBtn = document.createElement('button');
-    this.startBtn.id = 'challengeBtn'; // ancla del tutorial (P-VIVO.11)
-    this.startBtn.textContent = '🏅 Reto';
-    this.startBtn.title =
-      'Objetivo aleatorio dentro de la envolvente: apunta a mano (sin 🎯) y puntúa tu PRIMER impacto';
-    this.startBtn.onclick = () => void this.start();
-    this.movingBtn = document.createElement('button');
-    this.movingBtn.textContent = '🚚 Reto móvil';
-    this.movingBtn.title =
-      'Blanco en movimiento (20-60 km/h): apunta al FUTURO — el impacto se puntúa contra dónde está el camión cuando el tiro CAE';
-    this.movingBtn.onclick = () => void this.start(true);
-    this.surrenderBtn = document.createElement('button');
-    this.surrenderBtn.textContent = 'Rendirse';
-    this.surrenderBtn.title = 'Revela la solución (no puntúa)';
-    this.surrenderBtn.style.display = 'none';
-    this.surrenderBtn.onclick = () => void this.surrender();
-    row.append(this.startBtn, this.movingBtn, this.surrenderBtn);
-    host.appendChild(row);
+    // -- Blanco móvil ------------------------------------------------------------------
+    this.movingCard = missionCard({
+      icon: 'truck', tag: 'Tiro predicho', title: 'Blanco móvil', testid: 'mission-moving', gloss: 'adelanto',
+      desc: 'Un camión a 20–60 km/h. El impacto se puntúa contra dónde esté CUANDO EL TIRO CAE: adelanto = velocidad × TOF.',
+    });
+    this.ghost = new Toggle('Adelanto sugerido', this.loadGhostPref(), {
+      testid: 'ghost-toggle',
+      hint: 'Fantasma del camión extrapolado al TOF del preview. Re-apunta 2–3 veces y verás converger la solución.',
+    });
+    this.ghost.onChange = (on) => this.saveGhostPref(on);
+    this.movingCard.extra.appendChild(this.ghost.el);
+    this.movingBtn = button({
+      label: 'Iniciar reto móvil', icon: 'play', variant: 'primary', size: 's', testid: 'challenge-moving',
+      onClick: () => void this.start(true),
+    });
+    this.surrenderMoving = button({
+      label: 'Rendirse', size: 's', variant: 'ghost', testid: 'moving-surrender',
+      title: 'Revela la solución hacia donde está AHORA (no puntúa)', onClick: () => void this.surrender(),
+    });
+    this.surrenderMoving.hidden = true;
+    this.movingCard.actions.append(this.movingBtn, this.surrenderMoving);
 
-    // P-VIVO.7 — ayuda didáctica: fantasma del blanco extrapolado al TOF.
-    const ghostRow = document.createElement('div');
-    ghostRow.className = 'row';
-    const ghostLab = document.createElement('label');
-    ghostLab.textContent = 'Adelanto sugerido';
-    ghostLab.title =
-      'Pinta un fantasma del blanco en su posición extrapolada al TOF del preview. ' +
-      'Apunta al fantasma y aciertas… si el TOF no cambia al re-apuntar: re-apunta 2-3 veces ' +
-      'y verás converger la solución — esa es exactamente la lección del tiro predicho.';
-    this.ghostCheckbox = document.createElement('input');
-    this.ghostCheckbox.type = 'checkbox';
-    this.ghostCheckbox.checked = this.loadGhostPref();
-    this.ghostCheckbox.onchange = () => this.saveGhostPref(this.ghostCheckbox.checked);
-    ghostRow.append(ghostLab, this.ghostCheckbox);
-    host.appendChild(ghostRow);
-
-    this.statusEl = document.createElement('p');
-    this.statusEl.className = 'hint';
-    host.appendChild(this.statusEl);
+    host.append(this.staticCard.el, this.movingCard.el);
     this.showRecord();
   }
 
@@ -116,7 +121,7 @@ export class Challenge {
   get movingActive(): boolean { return this.active && this.mode === 'moving'; }
 
   /** P-VIVO.7 — ¿fantasma de adelanto activado? (main lo alimenta con el TOF). */
-  get ghostEnabled(): boolean { return this.ghostCheckbox.checked; }
+  get ghostEnabled(): boolean { return this.ghost.value; }
 
   private loadGhostPref(): boolean {
     try {
@@ -149,8 +154,7 @@ export class Challenge {
       const ring = await this.service.approxMaxRange(id, chargeAtStart);
       // La semilla del reloj SOLO aquí — la lógica del anillo es pura.
       // El reto móvil pasea el camión en [max(0.3·máx, mín), 0.95·máx]:
-      // respetar el alcance MÍNIMO evita zonas muertas inalcanzables
-      // (mortero a carga corta).
+      // respetar el alcance MÍNIMO evita zonas muertas inalcanzables.
       const movingLo = Math.max(0.3 * ring.maxRangeM, ring.minRangeM);
       const movingHi = 0.95 * ring.maxRangeM;
       const spec = moving
@@ -163,8 +167,8 @@ export class Challenge {
       // Altura REAL del suelo bajo la diana: perfil 1D del corredor.
       const corridor = await this.service.sampleCorridor(spec.azimuthDeg, spec.rangeM * 1.05, 400, 0);
       const ground = buildTerrain(corridor);
-      // Si el usuario cambió de arma/carga durante el planteo (awaits de
-      // terreno), este reto es del arma ANTERIOR: abortar en silencio.
+      // Si el usuario cambió de arma/carga durante el planteo, este reto es
+      // del arma ANTERIOR: abortar en silencio.
       if (this.panel.weaponId !== weaponAtStart || this.panel.chargeIndex !== chargeAtStart) {
         return;
       }
@@ -177,34 +181,39 @@ export class Challenge {
       this.surrendered = false;
       this.scored = false;
       this.hooks.lockPick(true);
-      this.surrenderBtn.style.display = '';
+      const unit = settings.angleUnit;
       if (moving) {
         // El camión ES el marcador: v aleatoria 20-60 km/h, rumbo aleatorio.
         this.hooks.marker(null);
         const speedMS = (20 + Math.random() * 40) / 3.6;
         const headingDeg = 360 * Math.random();
-        this.hooks.spawnMoving?.(this.target, headingDeg, speedMS, {
-          minM: movingLo,
-          maxM: movingHi,
-        });
-        this.startBtn.textContent = '🏅 Reto';
-        this.movingBtn.textContent = '🚚 Otro móvil';
-        this.statusEl.textContent =
-          `Blanco móvil a ${(spec.rangeM / 1000).toFixed(2)} km, ${(speedMS * 3.6).toFixed(0)} km/h. ` +
-          'Apunta al FUTURO: puntúa contra dónde esté el camión cuando el tiro CAIGA.';
-        toast('🚚 Reto móvil: lead = v·TOF — usa el fantasma de adelanto');
+        this.hooks.spawnMoving?.(this.target, headingDeg, speedMS, { minM: movingLo, maxM: movingHi });
+        this.movingCard.setLive(true);
+        this.staticCard.setLive(false);
+        this.surrenderMoving.hidden = false;
+        this.surrenderStatic.hidden = true;
+        setButtonLabel(this.movingBtn, 'Otro blanco');
+        setButtonLabel(this.startBtn, 'Iniciar reto');
+        this.movingCard.setStatus(
+          `Blanco a ${(spec.rangeM / 1000).toFixed(2)} km, ${(speedMS * 3.6).toFixed(0)} km/h. ` +
+          'Apunta al FUTURO: puntúa donde esté el camión cuando el tiro caiga.');
+        toast('Reto móvil: adelanto = velocidad × TOF — usa el fantasma de adelanto', { title: 'Blanco móvil' });
       } else {
         this.hooks.marker(this.target);
-        this.startBtn.textContent = '🏅 Otro reto';
-        this.movingBtn.textContent = '🚚 Reto móvil';
-        this.statusEl.textContent =
-          `Reto vivo: diana a ${(spec.rangeM / 1000).toFixed(2)} km, azimut ` +
-          `${spec.azimuthDeg.toFixed(1)}º. Apunta a mano y dispara: puntúa el PRIMER impacto.`;
-        toast('🏅 Reto: apunta con sliders/cockpit/tabla — 🎯 desactivado');
+        this.staticCard.setLive(true);
+        this.movingCard.setLive(false);
+        this.surrenderStatic.hidden = false;
+        this.surrenderMoving.hidden = true;
+        setButtonLabel(this.startBtn, 'Otra diana');
+        setButtonLabel(this.movingBtn, 'Iniciar reto móvil');
+        this.staticCard.setStatus(
+          `Diana a ${(spec.rangeM / 1000).toFixed(2)} km, azimut ${fmtAngle(spec.azimuthDeg, unit, unit === 'mil' ? 0 : 1)}. ` +
+          'Apunta a mano y dispara: puntúa el PRIMER impacto.');
+        toast('Apunta con los deslizadores, los instrumentos o la tabla de tiro — designación bloqueada', { title: 'Reto de precisión' });
       }
     } catch (err) {
       console.error('[challenge]', err);
-      toast('No se pudo plantear el reto');
+      toast('No se pudo plantear el reto', { level: 'error' });
     } finally {
       this.startBtn.disabled = false;
       this.movingBtn.disabled = false;
@@ -232,22 +241,23 @@ export class Challenge {
     records[this.panel.weaponId] = record;
     saveRecords(storeKey, records);
 
-    const bar = starBar(stars);
-    const tag = this.mode === 'moving' ? ' (móvil)' : '';
-    toast(`${bar} — fallo ${missM.toFixed(0)} m${tag}${improved ? ' · ¡RÉCORD!' : ''}`);
-    this.statusEl.textContent =
-      `${bar} fallo ${missM.toFixed(0)} m${tag}` +
-      (improved ? ' · ¡récord nuevo!' : ` · récord ${record.bestMissM.toFixed(0)} m`) +
-      ' — 🏅/🚚 para otro reto.';
+    const card = this.mode === 'moving' ? this.movingCard : this.staticCard;
+    toast(`${starsText(stars)} — fallo ${fmtNum(missM, 0)} m${improved ? ' · nuevo récord' : ''}`, {
+      level: stars >= 2 ? 'success' : stars === 1 ? 'info' : 'warn',
+      title: this.mode === 'moving' ? 'Blanco móvil' : 'Reto de precisión',
+    });
+    card.setStatus(
+      `${starsText(stars)}: fallo de ${fmtNum(missM, 0)} m` +
+      (improved ? ' — ¡récord nuevo!' : ` (récord ${fmtNum(record.bestMissM, 0)} m)`));
     this.end();
   }
 
   /** Revela la solución (rama según el panel) y cierra sin puntuar.
-   *  P-VIVO.7: en el reto móvil revela la solución hacia DONDE ESTÁ AHORA
-   *  (cuando llegue el tiro ya no estará: esa es la gracia). */
+   *  P-VIVO.7: en el reto móvil revela la solución hacia DONDE ESTÁ AHORA. */
   private async surrender(): Promise<void> {
     if (!this.target) return;
     this.surrendered = true;
+    const card = this.mode === 'moving' ? this.movingCard : this.staticCard;
     const tgt = this.mode === 'moving'
       ? this.hooks.movingPosition?.() ?? this.target
       : this.target;
@@ -258,11 +268,12 @@ export class Challenge {
       if (sol.found) {
         this.panel.setAim(sol.azimuthDeg, sol.elevationDeg);
         this.hooks.schedulePreview();
-        this.statusEl.textContent =
-          `Solución: az ${sol.azimuthDeg.toFixed(1)}º · QE ${sol.elevationDeg.toFixed(2)}º · ` +
-          `TOF ${sol.timeOfFlight.toFixed(1)} s. Sin puntuar — 🏅 para otro reto.`;
+        const u = settings.angleUnit;
+        card.setStatus(
+          `Solución: AZ ${fmtAngle(sol.azimuthDeg, u)} · QE ${fmtAngle(sol.elevationDeg, u)} · ` +
+          `TOF ${sol.timeOfFlight.toFixed(1)} s. Sin puntuar.`);
       } else {
-        this.statusEl.textContent = 'Ni la dirección de tiro le llega con esta carga…';
+        card.setStatus('Ni la dirección de tiro le llega con esta carga.');
       }
     } catch (err) {
       console.error('[challenge]', err);
@@ -282,15 +293,26 @@ export class Challenge {
     this.hooks.lockPick(false);
     this.hooks.clearMoving?.(); // P-VIVO.7 — el camión se retira
     this.mode = 'static';
-    this.surrenderBtn.style.display = 'none';
-    this.startBtn.textContent = '🏅 Reto';
-    this.movingBtn.textContent = '🚚 Reto móvil';
+    this.surrenderStatic.hidden = true;
+    this.surrenderMoving.hidden = true;
+    this.staticCard.setLive(false);
+    this.movingCard.setLive(false);
+    setButtonLabel(this.startBtn, 'Iniciar reto');
+    setButtonLabel(this.movingBtn, 'Iniciar reto móvil');
+    this.showRecordLines();
+  }
+
+  private showRecordLines(): void {
+    const name = WEAPON_INFO[this.panel.weaponId].designation;
+    const rec = loadRecords<ChallengeRecord>(STORE_KEY)[this.panel.weaponId];
+    this.staticCard.setRecord(rec ? rec.stars : null, rec ? `${fmtNum(rec.bestMissM, 0)} m · ${name}` : `sin récord con ${name}`);
+    const mrec = loadRecords<ChallengeRecord>(MOVING_STORE_KEY)[this.panel.weaponId];
+    this.movingCard.setRecord(mrec ? mrec.stars : null, mrec ? `${fmtNum(mrec.bestMissM, 0)} m · ${name}` : `sin récord con ${name}`);
   }
 
   private showRecord(): void {
-    const rec = loadRecords<ChallengeRecord>(STORE_KEY)[this.panel.weaponId];
-    this.statusEl.textContent = rec
-      ? `Récord con esta arma: ${starBar(rec.stars)} ${rec.bestMissM.toFixed(0)} m.`
-      : 'Sin récord con esta arma todavía — pulsa 🏅 Reto.';
+    this.showRecordLines();
+    this.staticCard.setStatus('');
+    this.movingCard.setStatus('');
   }
 }

@@ -6,6 +6,12 @@
 //  panel, resuelve elevación al hacer clic en el globo (rama alta/baja),
 //  previsualiza el arco en vivo y al disparar crea presentadores de
 //  proyectil (con retardos para la salva MRSI).
+//
+//  V2/UI: el orden de tiro lleva la ESPOLETA elegida por el operador y la
+//  corrección de V0 (temperatura del propelente, desgaste); la pieza
+//  alimenta el paso 4 con datos estructurados (setPreview/setTargetInfo/
+//  setSolveState), el estado de misión de la barra superior y la pestaña
+//  ANÁLISIS (informe del disparo, PER prevista, salva y comparación).
 // ============================================================================
 import {
   DeterministicRng, FireOrder, MAX_LIVE_PROJECTILES, Vec3, WeaponSystem,
@@ -25,7 +31,15 @@ import { CraterLayer } from './vfx/CraterLayer';
 import { VfxManager } from './vfx/effects';
 import { ControlPanel } from './ui/ControlPanel';
 import { HUD } from './ui/HUD';
+import { missionStatus } from './ui/missionStatus';
+import {
+  CompareReport, PredictionReport, SalvoReport, ShotReport, buildSalvoReport, buildShotReport,
+} from './ui/reports';
 import { toast } from './ui/toast';
+import { angleOfFallDeg, bearingDegOf } from './ui/units';
+import { WEAPON_INFO } from './ui/weaponInfo';
+
+const FUZE_NAME = { impact: 'Impacto', delay: 'Retardo', time: 'Tiempo', proximity: 'Proximidad' } as const;
 
 export class ArtilleryPiece {
   targetEnu: Vec3 | null = null;
@@ -35,6 +49,13 @@ export class ArtilleryPiece {
   onAnyImpact?: (impactEnu: Vec3) => void;
   /** P-VIVO.5 — recorte contra edificios 3D (main lo enchufa si hay tileset). */
   buildingHit: import('./BuildingHit').BuildingHit | null = null;
+  /** V2 — informes para la pestaña ANÁLISIS. */
+  onShotReport?: (r: ShotReport) => void;
+  onSalvoReport?: (r: SalvoReport) => void;
+  onPrediction?: (r: PredictionReport | null) => void;
+  onCompareReport?: (r: CompareReport) => void;
+  /** V2 — el objetivo designado cambió (barra superior, HUD de artillero). */
+  onTargetChanged?: (enu: Vec3 | null) => void;
 
   private presenters: ProjectilePresenter[] = [];
   private previewToken = 0;
@@ -80,6 +101,12 @@ export class ArtilleryPiece {
       elevationDeg: this.panel.elevationDeg,
       chargeIndex: this.panel.chargeIndex,
     };
+    // V2 — espoleta del operador y condiciones de la carga (sin ellas el
+    // orden es bit a bit el clásico: paridad intacta).
+    const fuze = this.panel.fuzeSpec();
+    if (fuze) base.fuze = fuze;
+    const v0c = this.panel.v0Correction();
+    if (v0c) base.v0Correction = v0c;
     // P-VIVO.8 — la ILLUM SIEMPRE lleva espoleta de tiempo: revienta 0.5 s
     // antes del impacto previsto para desplegar la bengala en alto. Sin
     // preview aún, cae a 'impact' (la bengala se abre a ras: degradación).
@@ -116,11 +143,21 @@ export class ArtilleryPiece {
       // P-PRO.6 — con objetivo marcado, elipse 1σ/2σ predicha sobre el
       // impacto previsto (mismas σ que la salva dispersa: deben solaparse).
       if (this.targetEnu) void this.refreshErrorEllipse(result, token);
-      else this.preview.showErrorEllipse(null);
-      this.panel.setSolution(
-        `QE ${this.panel.elevationDeg.toFixed(1)}º → ${(result.downrange / 1000).toFixed(2)} km · ` +
-          `TOF ${result.timeOfFlight.toFixed(1)} s · ápice ${(result.apex / 1000).toFixed(1)} km`,
-      );
+      else {
+        this.preview.showErrorEllipse(null);
+        this.onPrediction?.(null);
+      }
+      const tail = result.path[result.path.length - 1];
+      this.panel.setPreview({
+        rangeM: result.downrange,
+        tofS: result.timeOfFlight,
+        apexM: result.apex,
+        impactSpeedMS: result.impactSpeed,
+        angleOfFallDeg: tail ? angleOfFallDeg(tail.velocity) : 0,
+        maxRangeM: ring.maxRangeM,
+        minRangeM: ring.minRangeM,
+        detonation: result.detonation,
+      });
     } catch (err) {
       if ((err as Error)?.name === 'SupersededError') return; // preview obsoleto
       console.error('[preview]', err);
@@ -153,6 +190,7 @@ export class ArtilleryPiece {
         sigmaRangeM: pred.sigmaRangeM,
         sigmaCrossM: pred.sigmaCrossM,
       });
+      this.onPrediction?.({ sigmaRangeM: pred.sigmaRangeM, sigmaCrossM: pred.sigmaCrossM, rangeM: pred.rangeM });
     } catch (err) {
       if ((err as Error)?.name === 'SupersededError') return;
       console.error('[predict-dispersion]', err);
@@ -163,25 +201,59 @@ export class ArtilleryPiece {
   async aimAt(targetEnu: Vec3): Promise<void> {
     this.targetEnu = targetEnu;
     this.preview.showTarget(targetEnu);
-    this.panel.setStatus('Resolviendo dirección de tiro…');
-    const sol = await this.service.solveForTarget(
-      this.panel.weaponId, targetEnu, this.panel.chargeIndex, this.panel.preferHighAngle,
-    );
-    if (!sol.found) {
+    this.publishTarget(targetEnu);
+    this.onTargetChanged?.(targetEnu);
+    this.panel.setSolveState('solving');
+    this.panel.setStatus('Resolviendo la dirección de tiro contra el relieve…');
+    try {
+      const sol = await missionStatus.track(this.service.solveForTarget(
+        this.panel.weaponId, targetEnu, this.panel.chargeIndex, this.panel.preferHighAngle,
+      ));
+      if (this.targetEnu !== targetEnu) return; // otro objetivo más nuevo
+      if (!sol.found) {
+        this.panel.setSolveState('out');
+        this.panel.setStatus(
+          `Fuera de alcance con esta carga (${(sol.rangeM / 1000).toFixed(1)} km). ` +
+            'Prueba otra carga, otra rama u otra munición.',
+        );
+        toast('Objetivo fuera de alcance con la carga actual', { level: 'warn' });
+        return;
+      }
+      this.panel.setAim(sol.azimuthDeg, sol.elevationDeg);
+      this.panel.setSolveState('ok');
       this.panel.setStatus(
-        `Fuera de alcance con esta carga (${(sol.rangeM / 1000).toFixed(1)} km). ` +
-          'Prueba otra carga u otra rama.',
+        `Solución en rama ${this.panel.preferHighAngle ? 'alta' : 'baja'} · TOF ${sol.timeOfFlight.toFixed(1)} s. Listo para FUEGO.`,
       );
-      toast('Objetivo fuera de alcance');
-      return;
+      this.schedulePreview(0);
+    } catch (err) {
+      console.error('[aim]', err);
+      this.panel.setSolveState('manual');
+      this.panel.setStatus('No se pudo resolver la dirección de tiro.');
     }
-    this.panel.setAim(sol.azimuthDeg, sol.elevationDeg);
-    this.panel.setStatus(
-      `Solución ${this.panel.preferHighAngle ? 'rama alta' : 'rama baja'}: ` +
-        `az ${sol.azimuthDeg.toFixed(1)}º · QE ${sol.elevationDeg.toFixed(2)}º · ` +
-        `TOF ${sol.timeOfFlight.toFixed(1)} s`,
-    );
-    this.schedulePreview(0);
+  }
+
+  /** Datos del objetivo para el paso 3 (distancia, demora, Δcota, coords). */
+  private publishTarget(t: Vec3): void {
+    const carto = this.service.frame.cartographicOfEnu(t);
+    this.panel.setTargetInfo({
+      rangeM: Math.hypot(t.x, t.y),
+      bearingDeg: bearingDegOf(t.x, t.y),
+      dzM: t.z,
+      latDeg: (carto.latitude * 180) / Math.PI,
+      lonDeg: (carto.longitude * 180) / Math.PI,
+    });
+  }
+
+  /** Metadatos del disparo para el informe de ANÁLISIS. */
+  private shotMeta(guided: boolean): { weaponName: string; roundName: string; fuzeLabel: string; guided: boolean } {
+    const w = this.panel.weapon();
+    const fuze = this.order().fuze;
+    return {
+      weaponName: WEAPON_INFO[this.panel.weaponId].designation,
+      roundName: w.round.name,
+      fuzeLabel: w.category === 'SmallArms' ? 'Bala' : fuze ? FUZE_NAME[fuze.mode] : 'Impacto',
+      guided,
+    };
   }
 
   /** FUEGO (P-WEB.4). El objetivo marcado activa el guiado en municiones guiadas.
@@ -189,15 +261,19 @@ export class ArtilleryPiece {
   async fire(): Promise<void> {
     this.audio.unlock();
     this.panel.setFiring(true);
+    const target = this.targetEnu;
+    const meta = this.shotMeta(false);
+    this.hud.setRoundLabel(`${meta.weaponName} · ${meta.roundName}`);
     try {
       const weapon = this.service.weapon(this.panel.weaponId);
       if (weapon.category === 'SmallArms') {
         // La semilla del reloj SOLO aquí (la geometría del rebote es pura).
         const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
-        const segments = await this.service.solveWithRicochets(
+        const segments = await missionStatus.track(this.service.solveWithRicochets(
           this.panel.weaponId, this.order(), seed,
-        );
-        this.spawnSegments(segments, {});
+        ));
+        const report = buildShotReport(segments, meta, target);
+        this.spawnSegments(segments, {}, () => this.onShotReport?.(report));
         this.hud.show(segments[0]);
         this.panel.setStatus(
           `En vuelo: ${(segments[0].downrange / 1000).toFixed(2)} km, ` +
@@ -207,8 +283,9 @@ export class ArtilleryPiece {
         return;
       }
       const guided = weapon.round.guidance.enabled && this.targetEnu ? this.targetEnu : undefined;
-      const flight = await this.service.solveTrajectory(this.panel.weaponId, this.order(), guided);
-      this.spawn(flight.warheadTNTeq, flight, 0);
+      const flight = await missionStatus.track(this.service.solveTrajectory(this.panel.weaponId, this.order(), guided));
+      const report = buildShotReport([flight], { ...meta, guided: !!guided }, target);
+      this.spawn(flight.warheadTNTeq, flight, 0, () => this.onShotReport?.(report));
       this.hud.show(flight);
       this.panel.setStatus(
         `En vuelo: ${(flight.downrange / 1000).toFixed(2)} km, TOF ${flight.timeOfFlight.toFixed(1)} s` +
@@ -216,7 +293,7 @@ export class ArtilleryPiece {
       );
     } catch (err) {
       console.error('[fire]', err);
-      toast('No se pudo resolver el tiro');
+      toast('No se pudo resolver el tiro', { level: 'error' });
     } finally {
       this.panel.setFiring(false);
     }
@@ -231,11 +308,12 @@ export class ArtilleryPiece {
   private spawnSegments(
     segments: FlightResult[],
     base: import('./ProjectilePresenter').PresenterOptions,
+    onLastImpact?: () => void,
   ): void {
     let delay = 0;
     segments.forEach((flight, i) => {
       const last = i === segments.length - 1;
-      this.spawn(flight.warheadTNTeq, flight, delay, undefined, {
+      this.spawn(flight.warheadTNTeq, flight, delay, last ? onLastImpact : undefined, {
         ...base,
         silentLaunch: i > 0 || base.silentLaunch,
         midair: i > 0, // el rebote nace en el aire, no en la boca del arma
@@ -358,31 +436,33 @@ export class ArtilleryPiece {
         rangeM = probe.downrange;
       }
 
-      const rounds = await this.service.solveMRSI(this.panel.weaponId, azimuth, rangeM, nRounds);
+      const rounds = await missionStatus.track(this.service.solveMRSI(this.panel.weaponId, azimuth, rangeM, nRounds));
       if (rounds.length < 2) {
-        toast('MRSI imposible aquí: hacen falta ≥2 soluciones con TOF distinto');
+        toast('MRSI imposible aquí: hacen falta al menos 2 soluciones con TOF distinto', { level: 'warn' });
         this.panel.setStatus('MRSI: sin suficientes soluciones (prueba otro alcance).');
         return;
       }
 
       let lastFlight = null;
+      const fuze = this.order().fuze;
       for (const r of rounds) {
-        const flight = await this.service.solveTrajectory(this.panel.weaponId, {
+        const flight = await missionStatus.track(this.service.solveTrajectory(this.panel.weaponId, {
           azimuthDeg: azimuth, elevationDeg: r.elevationDeg, chargeIndex: r.chargeIndex,
-        });
+          ...(fuze ? { fuze } : {}),
+        }));
         this.spawn(flight.warheadTNTeq, flight, r.fireDelay);
         lastFlight = flight;
       }
       if (lastFlight) this.hud.show(lastFlight);
       this.panel.setStatus(
-        `Salva MRSI: ${rounds.length} rondas → impacto simultáneo en ` +
+        `Salva MRSI: ${rounds.length} rondas con impacto simultáneo a ` +
           `${(rangeM / 1000).toFixed(2)} km (QE ${rounds
             .map((r) => r.elevationDeg.toFixed(1))
-            .join('º / ')}º).`,
+            .join('° / ')}°).`,
       );
     } catch (err) {
       console.error('[mrsi]', err);
-      toast('Fallo calculando la salva MRSI');
+      toast('Fallo calculando la salva MRSI', { level: 'error' });
     } finally {
       this.panel.setFiring(false);
     }
@@ -401,12 +481,13 @@ export class ArtilleryPiece {
     try {
       const errors = this.dispersionErrors(); // P-PRO.6: las σ de la elipse
       const seed = (Date.now() ^ (Math.random() * 0xffffffff)) >>> 0;
-      const res = await this.service.fireDispersed(
+      const target = this.targetEnu;
+      const res = await missionStatus.track(this.service.fireDispersed(
         this.panel.weaponId, this.order(), nRounds, errors, seed,
-      );
+      ));
       const flights = res.flights ?? [];
       if (flights.length === 0) {
-        toast('La salva no devolvió tiros — mira la consola');
+        toast('La salva no devolvió tiros — mira la consola', { level: 'error' });
         return;
       }
 
@@ -415,7 +496,8 @@ export class ArtilleryPiece {
         this.spawn(flight.warheadTNTeq, flight, i * 0.5, () => {
           landed++;
           if (landed === flights.length) {
-            toast(`Zona batida: CEP ${res.cep.toFixed(0)} m (${flights.length} impactos)`);
+            toast(`Zona batida: CEP ${res.cep.toFixed(0)} m (${flights.length} impactos)`, { level: 'success' });
+            this.onSalvoReport?.(buildSalvoReport(res.impacts, res.cep, target));
           }
         });
       });
@@ -426,7 +508,7 @@ export class ArtilleryPiece {
       );
     } catch (err) {
       console.error('[disperse]', err);
-      toast('Fallo calculando la salva dispersa');
+      toast('Fallo calculando la salva dispersa', { level: 'error' });
     } finally {
       this.panel.setFiring(false);
     }
@@ -436,8 +518,11 @@ export class ArtilleryPiece {
   async compare(): Promise<void> {
     this.panel.setStatus('Calculando comparación de físicas…');
     try {
-      const list = await this.service.compareTrajectories(this.panel.weaponId, this.order());
+      const list = await missionStatus.track(this.service.compareTrajectories(this.panel.weaponId, this.order()));
       this.preview.showCompare(list);
+      this.onCompareReport?.({
+        entries: list.map((e) => ({ label: e.label, cssColor: e.cssColor, rangeM: e.result.downrange, tofS: e.result.timeOfFlight })),
+      });
       const vacio = list[0].result.downrange;
       const todo = list[list.length - 1].result.downrange;
       this.panel.setStatus(
@@ -446,7 +531,7 @@ export class ArtilleryPiece {
       );
     } catch (err) {
       console.error('[compare]', err);
-      toast('Fallo en el modo comparación');
+      toast('Fallo en el modo comparación', { level: 'error' });
     }
   }
 
@@ -486,7 +571,10 @@ export class ArtilleryPiece {
     p.onImpact = (impactEnu) => {
       this.director.shakeFromImpact(impactEnu, warheadTNTeq); // P0.1+P0.2
       this.director.setFocus(impactEnu); // orbital/dron miran al cráter
-      if (!opts.suppressScoring) this.onAnyImpact?.(impactEnu); // P-PRO.7/P-VIVO.4
+      if (!opts.suppressScoring) {
+        this.onAnyImpact?.(impactEnu); // P-PRO.7/P-VIVO.4
+        missionStatus.flashImpact();
+      }
       onImpactExtra?.();
     };
     this.presenters.push(p);
@@ -549,16 +637,27 @@ export class ArtilleryPiece {
     for (let i = this.presenters.length - 1; i >= 0; i--) {
       if (!this.presenters[i].update(dt)) this.presenters.splice(i, 1);
     }
-    // HUD: telemetría del proyectil vivo más reciente.
-    const live = [...this.presenters].reverse().find((p) => !p.isImpacted);
+    // HUD: telemetría del proyectil vivo más reciente (sin copiar el array).
+    let live: ProjectilePresenter | null = null;
+    let liveCount = 0;
+    for (let i = this.presenters.length - 1; i >= 0; i--) {
+      if (this.presenters[i].isImpacted) continue;
+      liveCount++;
+      live ??= this.presenters[i];
+    }
+    missionStatus.setInFlight(liveCount);
     if (live) this.hud.update(live.telemetry());
-    else if (this.presenters.length === 0) this.hud.hide();
+    else this.hud.hide();
   }
 
   clearTarget(): void {
     this.targetEnu = null;
     this.preview.showTarget(null);
     this.preview.showErrorEllipse(null); // P-PRO.6
+    this.panel.setTargetInfo(null);
+    this.panel.setSolveState('manual');
+    this.onPrediction?.(null);
+    this.onTargetChanged?.(null);
   }
 
   /**
@@ -574,6 +673,7 @@ export class ArtilleryPiece {
     }
     this.presenters = [];
     this.lastFlightCache = null;
-    this.hud.hide();
+    missionStatus.setInFlight(0);
+    this.hud.reset();
   }
 }

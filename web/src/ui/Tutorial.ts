@@ -1,17 +1,21 @@
 // ============================================================================
-//  Tutorial.ts — Primer contacto: coach-marks que avanzan AL HACER.  [P-VIVO.11]
+//  Tutorial.ts — Primer contacto: coach-marks que avanzan AL HACER.
+//  [P-VIVO.11 · rediseño V2: no bloqueante]
 //
-//  Seis pasos que se completan detectando la ACCIÓN real (eventos del app,
-//  nada de botón "siguiente" ciego): elegir arma → apuntar → FUEGO e impacto
-//  → objetivo con clic (elipse PER) → salva dispersa → abrir el reto.
+//  Seis pasos que se completan detectando la ACCIÓN real (eventos de la app,
+//  nada de "siguiente" ciego): elegir arma → apuntar → FUEGO e impacto →
+//  designar objetivo (elipse PER) → salva dispersa → abrir un reto.
 //
 //  * `TutorialMachine` — máquina de pasos PURA (sin DOM): índice, condición
-//    de avance por evento, terminado. Testeable en node.
-//  * `Tutorial` — capa DOM: overlay oscuro con RECORTE alrededor del elemento
-//    activo (box-shadow gigante del highlight) + globo con texto y "N/6";
-//    "Saltar" siempre visible. Solo la primera visita
-//    (localStorage 'unai-artillery/tutorial/v1') y relanzable desde "❓".
+//    de avance por evento, salto de paso, terminado. Testeable en node.
+//  * `Tutorial` — capa DOM NO BLOQUEANTE: un anillo pulsante alrededor del
+//    control del paso (sin velo: la app se ve y se usa entera) y una tarjeta
+//    compacta junto a él con "Paso N de 6", progreso, "Saltar paso" y
+//    "Cerrar". Solo en la primera visita (localStorage
+//    'unai-artillery/tutorial/v1'); se relanza desde Ayuda.
 // ============================================================================
+import { h, setText } from './dom';
+import { icon } from './icons';
 
 export type TutorialEvent =
   | 'weapon-changed'
@@ -30,33 +34,33 @@ export interface TutorialStep {
 export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     event: 'weapon-changed',
-    title: 'Elige tu arma',
-    text: 'Abre el selector y elige OTRA arma: de un mortero de 120 mm a un misil de 500 km.',
+    title: 'Elige un sistema de armas',
+    text: 'Abre el Arsenal y selecciona otra arma: del mortero de 120 mm al misil de 500 km.',
   },
   {
     event: 'aim-changed',
     title: 'Apunta',
-    text: 'Mueve el azimut o la elevación (sliders del panel, o la rosa y el cuadrante del cockpit). El arco naranja es tu tiro previsto.',
+    text: 'Gira la rosa de azimut o el cuadrante de elevación (rueda o arrastre), o usa las flechas del teclado. El arco ámbar es el tiro previsto.',
   },
   {
     event: 'impact',
-    title: '¡Fuego!',
-    text: 'Pulsa FUEGO y sigue el proyectil hasta el impacto. El estampido llega tarde: es el sonido recorriendo la distancia real.',
+    title: 'Fuego',
+    text: 'Pulsa FUEGO (o la tecla F) y sigue el proyectil. El estampido llega tarde: es el sonido recorriendo la distancia real.',
   },
   {
     event: 'target-marked',
-    title: 'Marca un objetivo',
-    text: 'Pulsa 🎯 y haz clic en el globo: la dirección de tiro resuelve sola y la elipse roja muestra el error probable (PER).',
+    title: 'Designa un objetivo',
+    text: 'Pulsa "Designar en mapa" y haz clic en el terreno: la dirección de tiro resuelve sola y la elipse muestra el error probable.',
   },
   {
     event: 'salvo-fired',
     title: 'Salva dispersa',
-    text: 'Lanza la salva ×6: seis tiros con errores realistas. Los cráteres dibujan la elipse de dispersión de verdad.',
+    text: 'Lanza la salva ×6: seis tiros con errores realistas. Los cráteres dibujan la dispersión y ANÁLISIS la mide.',
   },
   {
     event: 'challenge-opened',
-    title: 'El reto',
-    text: 'Abre 🏅 Reto: diana aleatoria, puntería a mano y estrellas por precisión. También hay reto FO 🔭 y blanco móvil 🚚.',
+    title: 'Instrucción',
+    text: 'En la pestaña INSTRUCCIÓN inicia un reto: diana a mano, blanco móvil o corrección como observador avanzado.',
   },
 ];
 
@@ -78,6 +82,11 @@ export class TutorialMachine {
     return true;
   }
 
+  /** El usuario salta el paso actual (sin realizar la acción). */
+  skipStep(): void {
+    if (!this.done) this.stepIndex++;
+  }
+
   reset(): void { this.stepIndex = 0; }
 }
 
@@ -90,30 +99,27 @@ const STORE_KEY = 'unai-artillery/tutorial/v1';
 export class Tutorial {
   private readonly machine = new TutorialMachine();
   private overlay!: HTMLElement;
-  private highlight!: HTMLElement;
-  private balloon!: HTMLElement;
+  private ring!: HTMLElement;
+  private card!: HTMLElement;
   private stepLabel!: HTMLElement;
   private titleEl!: HTMLElement;
   private textEl!: HTMLElement;
+  private dots!: HTMLElement;
   private active = false;
   private repositionTimer: number | undefined;
+  /** Notifica el fin (completado o cerrado) — p. ej. para un aviso. */
+  onFinish?: (completed: boolean) => void;
 
   constructor(
-    /** Elemento a resaltar en cada paso (null = globo centrado, sin recorte). */
+    /** Elemento a resaltar en cada paso (null = tarjeta centrada, sin anillo). */
     private readonly anchorOf: (stepIndex: number) => HTMLElement | null,
+    opts: { autoStart?: boolean } = {},
   ) {
     this.buildDom();
-    // Botón ❓ para relanzarlo cuando se quiera.
-    const help = document.createElement('button');
-    help.id = 'tutorialHelpBtn';
-    help.textContent = '❓';
-    help.title = 'Relanzar el tutorial';
-    help.setAttribute('aria-label', 'Relanzar el tutorial');
-    help.onclick = () => this.start();
-    document.body.appendChild(help);
-
-    if (!this.seen()) this.start();
+    if ((opts.autoStart ?? true) && !this.seen()) this.start();
   }
+
+  get isActive(): boolean { return this.active; }
 
   private seen(): boolean {
     try {
@@ -132,105 +138,128 @@ export class Tutorial {
   }
 
   private buildDom(): void {
-    this.overlay = document.createElement('div');
-    this.overlay.id = 'tutorialOverlay';
-    this.overlay.style.display = 'none';
-
-    this.highlight = document.createElement('div');
-    this.highlight.className = 'tut-highlight';
-
-    this.balloon = document.createElement('div');
-    this.balloon.className = 'tut-balloon';
-    this.stepLabel = document.createElement('div');
-    this.stepLabel.className = 'tut-step';
-    this.titleEl = document.createElement('h3');
-    this.textEl = document.createElement('p');
-    const skip = document.createElement('button');
-    skip.className = 'tut-skip';
-    skip.textContent = 'Saltar';
-    skip.onclick = () => this.finish();
-    this.balloon.append(this.stepLabel, this.titleEl, this.textEl, skip);
-
-    this.overlay.append(this.highlight, this.balloon);
+    this.ring = h('div', { class: 'tut-ring' });
+    this.stepLabel = h('span', { class: 'tut-step num', testid: 'tutorial-step' });
+    this.titleEl = h('h3', { class: 'tut-title' });
+    this.textEl = h('p', { class: 'tut-text' });
+    this.dots = h('div', { class: 'tut-dots', attrs: { 'aria-hidden': 'true' } });
+    for (let i = 0; i < TUTORIAL_STEPS.length; i++) this.dots.appendChild(h('span', { class: 'tut-dot' }));
+    const skip = h('button', {
+      class: 'ua-btn ua-btn--ghost ua-btn--s tut-skip-step', testid: 'tutorial-next',
+      attrs: { type: 'button' }, on: { click: () => this.skipStep() },
+    }, h('span', { class: 'ua-btn__label', text: 'Saltar paso' }), icon('chevronRight', 14));
+    const close = h('button', {
+      class: 'ua-btn ua-btn--secondary ua-btn--s tut-skip', testid: 'tutorial-close',
+      attrs: { type: 'button' }, on: { click: () => this.finish() },
+    }, h('span', { class: 'ua-btn__label', text: 'Saltar tutorial' }));
+    this.card = h('div', { class: 'tut-card', attrs: { role: 'dialog', 'aria-live': 'polite', 'aria-label': 'Tutorial' } },
+      h('div', { class: 'tut-card__head' },
+        h('span', { class: 'tut-badge' }, icon('help', 14), 'Primeros pasos'),
+        this.stepLabel,
+      ),
+      this.titleEl,
+      this.textEl,
+      h('div', { class: 'tut-card__foot' }, this.dots, h('span', { class: 'tut-grow' }), skip, close),
+    );
+    this.overlay = h('div', { id: 'tutorialOverlay', testid: 'tutorial' }, this.ring, this.card);
+    this.overlay.hidden = true;
     document.body.appendChild(this.overlay);
   }
 
   start(): void {
     this.machine.reset();
     this.active = true;
-    this.overlay.style.display = '';
+    this.overlay.hidden = false;
     this.render();
-    // Los paneles hacen scroll y las ventanas cambian: re-posiciona periódico.
+    // Los paneles se desplazan y la ventana cambia: re-posiciona periódico.
     window.clearInterval(this.repositionTimer);
-    this.repositionTimer = window.setInterval(() => this.position(), 400);
+    this.repositionTimer = window.setInterval(() => this.position(), 350);
   }
 
-  /** Conectar a los eventos reales del app (main.ts). */
+  /** Conectar a los eventos reales de la app (main.ts). */
   notify(ev: TutorialEvent): void {
     if (!this.active) return;
     if (!this.machine.advance(ev)) return;
-    if (this.machine.done) {
-      this.finish(true);
-    } else {
-      this.render();
-    }
+    if (this.machine.done) this.finish(true);
+    else this.render();
   }
 
-  private finish(completed = false): void {
+  private skipStep(): void {
+    this.machine.skipStep();
+    if (this.machine.done) this.finish(true);
+    else this.render();
+  }
+
+  finish(completed = false): void {
+    if (!this.active) return;
     this.active = false;
-    this.overlay.style.display = 'none';
+    this.overlay.hidden = true;
     window.clearInterval(this.repositionTimer);
     this.markSeen();
-    if (completed) {
-      this.stepLabel.textContent = '';
-      // Un cierre amable sin depender de toast (evita ciclos de import).
-      console.log('[tutorial] completado');
-    }
+    this.onFinish?.(completed);
   }
 
   private render(): void {
     const step = this.machine.current;
     if (!step) return;
-    this.stepLabel.textContent = `${this.machine.stepIndex + 1}/${this.machine.total}`;
-    this.titleEl.textContent = step.title;
-    this.textEl.textContent = step.text;
+    setText(this.stepLabel, `${this.machine.stepIndex + 1}/${this.machine.total}`);
+    setText(this.titleEl, step.title);
+    setText(this.textEl, step.text);
+    [...this.dots.children].forEach((d, i) => {
+      d.classList.toggle('is-done', i < this.machine.stepIndex);
+      d.classList.toggle('is-on', i === this.machine.stepIndex);
+    });
+    this.card.classList.remove('is-in');
+    void this.card.offsetWidth; // reinicia la animación de entrada
+    this.card.classList.add('is-in');
     this.position();
   }
 
-  /** Recorte sobre el ancla del paso y globo al lado (con flecha CSS). */
+  /** Anillo sobre el ancla del paso y tarjeta al lado (sin tapar el ancla). */
   private position(): void {
     if (!this.active) return;
     const anchor = this.anchorOf(this.machine.stepIndex);
-    if (!anchor) {
-      this.highlight.style.display = 'none';
-      this.balloon.style.left = '50%';
-      this.balloon.style.top = '30%';
-      this.balloon.style.transform = 'translateX(-50%)';
-      this.balloon.classList.remove('arrow-left');
+    const cw = this.card.offsetWidth || 320;
+    const ch = this.card.offsetHeight || 170;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (!anchor || anchor.offsetParent === null) {
+      this.ring.hidden = true;
+      this.card.style.left = `${Math.round((vw - cw) / 2)}px`;
+      this.card.style.top = `${Math.round(vh * 0.22)}px`;
+      this.card.dataset.side = 'none';
       return;
     }
     const r = anchor.getBoundingClientRect();
-    const pad = 6;
-    this.highlight.style.display = '';
-    this.highlight.style.left = `${r.left - pad}px`;
-    this.highlight.style.top = `${r.top - pad}px`;
-    this.highlight.style.width = `${r.width + pad * 2}px`;
-    this.highlight.style.height = `${r.height + pad * 2}px`;
+    const pad = 5;
+    this.ring.hidden = false;
+    this.ring.style.left = `${r.left - pad}px`;
+    this.ring.style.top = `${r.top - pad}px`;
+    this.ring.style.width = `${r.width + pad * 2}px`;
+    this.ring.style.height = `${r.height + pad * 2}px`;
 
-    // Globo a la derecha del ancla (los paneles viven a la izquierda); si no
-    // cabe, debajo.
-    const bw = 300;
-    let left = r.right + 18;
-    let top = r.top;
-    let arrowLeft = true;
-    if (left + bw > window.innerWidth - 8) {
-      left = Math.max(8, Math.min(window.innerWidth - bw - 8, r.left));
-      top = r.bottom + 14;
-      arrowLeft = false;
+    const gap = 16;
+    let left: number;
+    let top: number;
+    let side: string;
+    if (r.right + gap + cw < vw - 8) {
+      left = r.right + gap; top = r.top + r.height / 2 - ch / 2; side = 'right';
+    } else if (r.left - gap - cw > 8) {
+      left = r.left - gap - cw; top = r.top + r.height / 2 - ch / 2; side = 'left';
+    } else if (r.bottom + gap + ch < vh - 8) {
+      left = r.left + r.width / 2 - cw / 2; top = r.bottom + gap; side = 'below';
+    } else {
+      left = r.left + r.width / 2 - cw / 2; top = r.top - gap - ch; side = 'above';
     }
-    this.balloon.style.transform = '';
-    this.balloon.style.left = `${left}px`;
-    this.balloon.style.top = `${Math.max(8, Math.min(window.innerHeight - 180, top))}px`;
-    this.balloon.classList.toggle('arrow-left', arrowLeft);
+    left = Math.max(8, Math.min(vw - cw - 8, left));
+    top = Math.max(60, Math.min(vh - ch - 8, top));
+    this.card.style.left = `${Math.round(left)}px`;
+    this.card.style.top = `${Math.round(top)}px`;
+    this.card.dataset.side = side;
+    // Flecha hacia el centro del ancla.
+    const ax = side === 'below' || side === 'above' ? r.left + r.width / 2 - left : 0;
+    const ay = side === 'left' || side === 'right' ? r.top + r.height / 2 - top : 0;
+    this.card.style.setProperty('--arrow-x', `${Math.max(16, Math.min(cw - 16, ax))}px`);
+    this.card.style.setProperty('--arrow-y', `${Math.max(16, Math.min(ch - 16, ay))}px`);
   }
 }
