@@ -35,8 +35,12 @@ import { ShareState, decodeState, encodeState } from './ui/shareState';
 import { Vec3 } from './ballistics';
 import type { FlightResult, WeaponId } from './ballistics';
 import type { RangeRing } from './BallisticsService';
-
-type PickMode = 'none' | 'target' | 'battery';
+// === V2:MAP === mapa: lectura, menú contextual, APP-6, abanico, medición, capas, rejilla
+import { MapInteraction } from './map/MapInteraction';
+import type { PickMode } from './map/MapInteraction';
+import { subjectSizeForCategory } from './map/cameraMath';
+import type { FiringTable } from './ballistics';
+// === fin V2:MAP ===
 
 async function boot(): Promise<void> {
   const viewer = await createViewer('cesiumContainer');
@@ -54,7 +58,10 @@ async function boot(): Promise<void> {
   const director = new CameraDirector(viewer, service);
   const hud = new HUD();
 
-  let pickMode: PickMode = 'none';
+  // === V2:MAP === el picking del globo lo lleva MapInteraction (contrato PLAN §3.4)
+  let mapUi: MapInteraction | null = null;
+  const setPickMode = (mode: PickMode): void => mapUi?.setPickMode(mode);
+  // === fin V2:MAP ===
   let piece: ArtilleryPiece;
   let gun: GunModel;
 
@@ -104,6 +111,7 @@ async function boot(): Promise<void> {
     },
     onClearCraters: () => {
       craters.clear();
+      mapUi?.clearImpacts(); // V2:MAP
       toast('Cráteres limpiados');
     },
     onCameraMode: (mode) => {
@@ -123,14 +131,10 @@ async function boot(): Promise<void> {
       if (mode === 'orbital') director.setFocus(new Vec3(0, 0, 60));
       if (mode === 'free') flyToBattery(false);
     },
-    onPickTarget: (active) => {
-      pickMode = active ? 'target' : 'none';
-      if (active) toast('Clic en el globo para marcar el objetivo');
-    },
-    onMoveBattery: (active) => {
-      pickMode = active ? 'battery' : 'none';
-      if (active) toast('Clic en el globo para desplegar la batería ahí');
-    },
+    // === V2:MAP === (el chip de modo del mapa sustituye a los toasts)
+    onPickTarget: (active) => setPickMode(active ? 'target' : 'none'),
+    onMoveBattery: (active) => setPickMode(active ? 'battery' : 'none'),
+    // === fin V2:MAP ===
     onGoogleTiles: (active) => void applyGoogleTiles(active),
     onToggleArc: (visible) => {
       preview.setArcVisible(visible);
@@ -309,7 +313,7 @@ async function boot(): Promise<void> {
   const challenge = new Challenge(service, panel, {
     marker: (enu) => preview.showChallengeTarget(enu),
     lockPick: (locked) => {
-      if (locked) pickMode = 'none'; // por si 🎯 estaba armado
+      if (locked) setPickMode('none'); // por si 🎯 estaba armado  // V2:MAP
       panel.setPickEnabled(!locked);
     },
     schedulePreview: () => piece.schedulePreview(0),
@@ -336,7 +340,7 @@ async function boot(): Promise<void> {
   const fo = new ForwardObserver(service, panel, {
     marker: (enu) => preview.showChallengeTarget(enu),
     lockPick: (locked) => {
-      if (locked) pickMode = 'none';
+      if (locked) setPickMode('none'); // V2:MAP
       panel.setPickEnabled(!locked);
     },
     schedulePreview: () => piece.schedulePreview(0),
@@ -361,6 +365,7 @@ async function boot(): Promise<void> {
     challenge.notifyImpact(enu);
     fo.notifyImpact(enu); // P-VIVO.6 — cuenta rondas y puntúa el reto FO
     gunnerHud.addImpact(enu); // punto en el minimapa del artillero
+    mapUi?.notifyImpact(enu); // V2:MAP — estallido APP-6 + corrección de observador
     tutorial?.notify('impact'); // P-VIVO.11 — paso ③: FUEGO e impacto
   };
 
@@ -372,45 +377,64 @@ async function boot(): Promise<void> {
   });
   director.muzzleProvider = () => gun.muzzleWorldEnu(); // cabina pegada al tubo
 
-  // -- Picking sobre el globo ------------------------------------------------
-  const pickEcef = (windowPos: Cesium.Cartesian2): Cesium.Cartesian3 | undefined => {
-    const scene = viewer.scene;
-    if (scene.pickPositionSupported) {
-      const p = scene.pickPosition(windowPos);
-      if (Cesium.defined(p)) return p;
-    }
-    const ray = viewer.camera.getPickRay(windowPos);
-    return ray ? scene.globe.pick(ray, scene) : undefined;
+  // === V2:MAP === Interacción con el mapa (sustituye al manejador de picking):
+  // lectura bajo el cursor, menú contextual, APP-6, abanico, medición/LOS,
+  // capas base, rejilla MGRS, brújula/zoom y atajos T/B/M/G/L/N/Inicio/1–6/Esc.
+  director.subjectSizeProvider = () => subjectSizeForCategory(panel.weapon().category);
+  director.onModeChanged = (mode) => panel.markCamera(mode === 'op' ? 'free' : mode);
+  mapUi = new MapInteraction({
+    viewer,
+    service,
+    weapon: () => panel.weapon(),
+    weaponId: () => panel.weaponId,
+    chargeIndex: () => panel.chargeIndex,
+    aim: () => ({ azimuthDeg: panel.azimuthDeg, elevationDeg: panel.elevationDeg }),
+    target: () => piece.targetEnu,
+    pickLocked: () => challenge.active || fo.active,
+    director,
+    preview,
+    observer: () => (fo.active ? director.lastOpPositionEnu : null),
+    // TODO(integración): la UI debería exponer la tabla vigente con un getter público.
+    firingTable: () => (firingTable as unknown as { table: FiringTable | null }).table ?? null,
+    actions: {
+      setTarget: (enu) => {
+        void piece.aimAt(enu);
+        tutorial?.notify('target-marked'); // P-VIVO.11 — paso ④
+      },
+      moveBattery: (lonDeg, latDeg) => {
+        void (async () => {
+          await reanchorBattery(lonDeg, latDeg);
+          weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
+          flyToBattery(true);
+          toast(`Batería desplegada (lat ${latDeg.toFixed(3)}º)`);
+        })();
+      },
+      flyToBattery: () => flyToBattery(true),
+      flyToTarget: () => {
+        if (piece.targetEnu) director.frameTarget(piece.targetEnu);
+      },
+      setCameraMode: (mode) => {
+        // Mismo comportamiento que los botones de cámara del panel.
+        if (mode === 'follow') {
+          if (!piece.followLatest()) {
+            toast('No hay proyectil que seguir todavía — dispara primero');
+            return;
+          }
+        } else {
+          director.setMode(mode);
+        }
+        panel.markCamera(mode);
+        if (mode === 'orbital') director.setFocus(new Vec3(0, 0, 60));
+        if (mode === 'fps') toast('1ª persona: clic en el globo para capturar el ratón · Esc suelta');
+      },
+    },
+  });
+  mapUi.onPickModeChanged = (mode) => {
+    panel.setPickActive(mode === 'target');
+    panel.setBatteryActive(mode === 'battery');
   };
-
-  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  handler.setInputAction((ev: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-    if (pickMode === 'none') return;
-    const ecef = pickEcef(ev.position);
-    if (!ecef) {
-      toast('Ahí no hay globo que picar');
-      return;
-    }
-    if (pickMode === 'target') {
-      pickMode = 'none';
-      panel.setPickActive(false);
-      void piece.aimAt(service.frame.ecefToEnu(ecef));
-      tutorial?.notify('target-marked'); // P-VIVO.11 — paso ④
-    } else {
-      pickMode = 'none';
-      panel.setBatteryActive(false);
-      const carto = Cesium.Cartographic.fromCartesian(ecef);
-      void (async () => {
-        await reanchorBattery(
-          Cesium.Math.toDegrees(carto.longitude),
-          Cesium.Math.toDegrees(carto.latitude),
-        );
-        weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
-        flyToBattery(true);
-        toast(`Batería desplegada (lat ${Cesium.Math.toDegrees(carto.latitude).toFixed(3)}º)`);
-      })();
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  (window as unknown as Record<string, unknown>).__uaMap = mapUi;
+  // === fin V2:MAP ===
 
   // ---------------------------------------------------------------------------
   //  P-VIVO.10 — compartir por URL (#s=…) + sesión persistida.
@@ -540,19 +564,9 @@ async function boot(): Promise<void> {
 
   // -- Cámara inicial ----------------------------------------------------------
   function flyToBattery(fast: boolean): void {
-    const f = service.frame;
-    viewer.camera.flyTo({
-      destination: f.enuToEcef(new Vec3(-900, -900, 500)),
-      orientation: {
-        direction: Cesium.Cartesian3.normalize(
-          f.enuVectorToEcef(new Vec3(0.62, 0.62, -0.28)), new Cesium.Cartesian3(),
-        ),
-        up: Cesium.Cartesian3.normalize(
-          f.enuVectorToEcef(new Vec3(0.2, 0.2, 0.96)), new Cesium.Cartesian3(),
-        ),
-      },
-      duration: fast ? 1.2 : 2.8,
-    });
+    // === V2:MAP === encuadre de batería: arma en primer plano, mirando aguas abajo
+    director.frameBattery(fast);
+    // === fin V2:MAP ===
   }
   flyToBattery(false);
 

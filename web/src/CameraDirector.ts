@@ -1,37 +1,51 @@
 // ============================================================================
 //  CameraDirector.ts — Cámaras cinemáticas sobre la cámara de Cesium.
-//  [P-WEB.6, + bullet-time (P3.3) y sacudida por yield/distancia (P0.2)]
+//  [P-WEB.6, + bullet-time (P3.3), sacudida por yield/distancia (P0.2) y
+//   rediseño V2:MAP: encuadres, vuelos suaves, colisión con el terreno y
+//   vista de impacto cinematográfica]
 //
 //  Modos:
-//    * free    — el usuario maneja Cesium con el ratón; no tocamos nada.
+//    * free    — el usuario maneja Cesium con el ratón (colisión con el
+//                terreno activada). Los vuelos (ir a batería/objetivo,
+//                doble clic, norte arriba, planeamiento, zoom) son suaves.
 //    * orbital — órbita perezosa alrededor de un foco (batería u objetivo).
-//    * follow  — persigue el proyectil con adelanto para hipersónicos.
-//                ORBITABLE: arrastrar cambia la perspectiva alrededor del
-//                proyectil y la rueda ajusta el zoom (distancia).
+//    * follow  — persigue el proyectil SIN retraso: se suaviza el OFFSET
+//                respecto al proyectil (no su posición absoluta), así ni
+//                los hipersónicos se escapan ni hay temblor. Arrastrar
+//                orbita, la rueda acerca. Al impactar pasa a la VISTA DE
+//                IMPACTO: distancia de seguridad según la carga explosiva,
+//                ligera picada y órbita lenta alrededor del estallido.
 //    * drone   — vista cenital de recon sobre la zona de impacto.
-//    * cabin   — P-NEXT.1: cámara en la boca del arma, orientada según el
-//                azimut/elevación ACTUALES (se mueve en vivo con la rueda del
-//                cockpit); al pulsar Fuego ves el fogonazo y el tiro salir.
+//    * cabin   — P-NEXT.1: cámara de artillero tras la culata, orientada
+//                según el azimut/elevación ACTUALES.
 //    * fps     — 1ª persona: clic captura el ratón (pointer lock), WASD
 //                mueve, Espacio/C sube/baja, Shift esprinta, la rueda ajusta
 //                la velocidad. Esc suelta el ratón.
+//    * op      — P-VIVO.6: puesto de observación FIJO (reto FO).
 //
-//  Todo el movimiento (salvo fps, que es directo) es críticamente amortiguado
-//  (alpha = 1 - e^(-k dt)): nada corta, todo desliza. El bullet-time baja el
-//  timeDilation del proyectil seguido cuando falta <1 s para el impacto y lo
-//  restaura después.
+//  Ninguna cámara del director baja del terreno: cada pose se valida con
+//  globe.getHeight (margen por modo). Todo el movimiento (salvo fps) es
+//  críticamente amortiguado (alpha = 1 - e^(-k dt)): nada corta, todo desliza.
 // ============================================================================
 import * as Cesium from 'cesium';
 import { Vec3, WeaponSystem } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { ProjectilePresenter } from './ProjectilePresenter';
+import {
+  P3, azimuthDeg, batteryFramingPose, impactOrbitPose, impactViewDistanceM, lerp3, smoothAngleDeg,
+  smoothK,
+} from './map/cameraMath';
+import { mapViewportRect } from './map/dom';
 
-//    * op      — P-VIVO.6: puesto de observación FIJO (reto FO): girar con
-//                arrastre, zoom de prismáticos con la rueda (FOV), sin
-//                desplazamiento. Se entra con enterOp().
 export type CameraMode = 'free' | 'orbital' | 'follow' | 'drone' | 'cabin' | 'fps' | 'op';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const EASE = Cesium.EasingFunction.QUADRATIC_IN_OUT;
+
+/** Margen mínimo sobre el terreno por modo (m). */
+const TERRAIN_MARGIN: Record<CameraMode, number> = {
+  free: 2, orbital: 25, follow: 6, drone: 60, cabin: 1.2, fps: 1.7, op: 0.5,
+};
 
 export class CameraDirector {
   mode: CameraMode = 'free';
@@ -41,10 +55,16 @@ export class CameraDirector {
   stiffness = 2.6;
   /** Activa la rampa de cámara lenta cerca del impacto. */
   bulletTime = true;
+  /** Activa la vista de impacto cinematográfica al caer el proyectil seguido. */
+  impactCinematic = true;
   /** P-NEXT.1 — puntería actual para el modo cabina (lo fija main.ts). */
   aimProvider: (() => { azimuthDeg: number; elevationDeg: number }) | null = null;
   /** P-PRO.1 — boca REAL del tubo (la cabina se monta pegada a ella). */
   muzzleProvider: (() => Vec3) | null = null;
+  /** V2 — tamaño (m) del arma vigente para el encuadre de batería. */
+  subjectSizeProvider: (() => number) | null = null;
+  /** V2 — el modo cambió (p. ej. un vuelo de navegación volvió a 'free'). */
+  onModeChanged?: (mode: CameraMode) => void;
 
   private tracked: ProjectilePresenter | null = null;
   private focusEnu = new Vec3(0, 0, 0);
@@ -61,6 +81,12 @@ export class CameraDirector {
   private dragging = false;
   private lastDragX = 0;
   private lastDragY = 0;
+  // Estado suavizado del seguimiento (offset relativo, sin retraso).
+  private fHeadingDeg: number | null = null;
+  private fOffset: P3 | null = null;
+  private fLead: P3 | null = null;
+  // Vista de impacto.
+  private impactView: { center: Vec3; dist: number; az: number } | null = null;
 
   // -- 1ª persona -------------------------------------------------------------
   private fpsPos: Vec3 | null = null;
@@ -75,10 +101,23 @@ export class CameraDirector {
   private opPitchDeg = 0;
   private opSavedFovDeg: number | null = null;
 
+  private readonly scratchCarto = new Cesium.Cartographic();
+  private readonly scratchC3 = new Cesium.Cartesian3();
+
   constructor(
     private readonly viewer: Cesium.Viewer,
     private readonly service: BallisticsService,
   ) {
+    // Colisión con el terreno en modo libre y zoom mínimo sensato (se puede
+    // rozar el arma, nunca atravesar el suelo).
+    const ssc = viewer.scene.screenSpaceCameraController;
+    ssc.enableCollisionDetection = true;
+    ssc.minimumZoomDistance = 2.0;
+    // El doble clic de Cesium "engancha" la cámara a la entidad pulsada
+    // (trackedEntity): fuera — MapInteraction vuela suavemente al punto.
+    viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
+      Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK,
+    );
     this.installInputs();
   }
 
@@ -91,11 +130,13 @@ export class CameraDirector {
       }
       this.opSavedFovDeg = null;
     }
+    const changed = mode !== this.mode;
     this.mode = mode;
     this.smoothedPos = null; // re-engancha suave desde la posición actual
     this.smoothedAim = null;
     const ssc = this.viewer.scene.screenSpaceCameraController;
     ssc.enableInputs = mode === 'free';
+    if (mode !== 'free') this.viewer.camera.cancelFlight();
     if (mode === 'fps') {
       this.enterFps();
     } else {
@@ -107,7 +148,12 @@ export class CameraDirector {
       this.followZoom = 1.0;
       this.followYawDeg = 0;
       this.followPitchDeg = 0;
+      this.fHeadingDeg = null;
+      this.fOffset = null;
+      this.fLead = null;
+      this.impactView = null;
     }
+    if (changed) this.onModeChanged?.(mode);
   }
 
   /**
@@ -122,6 +168,16 @@ export class CameraDirector {
     this.opSavedFovDeg =
       f instanceof Cesium.PerspectiveFrustum && f.fov ? Cesium.Math.toDegrees(f.fov) : null;
     this.setMode('op');
+  }
+
+  /** Posición del puesto de observación vigente (null fuera del modo OP). */
+  get opPositionEnu(): Vec3 | null {
+    return this.mode === 'op' ? this.opPos : null;
+  }
+
+  /** Último OP usado (aunque la cámara ya no esté en él). */
+  get lastOpPositionEnu(): Vec3 | null {
+    return this.opPos;
   }
 
   /** Velocidad de vuelo actual del modo 1ª persona (para el HUD/toasts). */
@@ -258,6 +314,183 @@ export class CameraDirector {
     this.shake(amp);
   }
 
+  // ---------------------------------------------------------------------------
+  //  V2 — Vuelos de navegación (siempre en modo libre, suaves y seguros).
+  // ---------------------------------------------------------------------------
+
+  /** Pasa a modo libre si hace falta (los vuelos son del usuario). */
+  ensureFree(): void {
+    if (this.mode !== 'free') this.setMode('free');
+  }
+
+  /**
+   * Encuadre de batería por defecto: el arma cerca en primer plano (tercio
+   * inferior izquierdo), vista oblicua baja mirando aguas abajo del tiro,
+   * para que el arco y la zona de impacto entren en plano.
+   */
+  frameBattery(fast = false): void {
+    this.ensureFree();
+    const lay = this.aimProvider?.() ?? { azimuthDeg: 0, elevationDeg: 0 };
+    const size = this.subjectSizeProvider?.() ?? 10;
+    const pose = batteryFramingPose(lay.azimuthDeg, size);
+    const eye = this.clampToTerrain(new Vec3(pose.eye.x, pose.eye.y, pose.eye.z), 1.5 + size * 0.2);
+    this.flyToPose(eye, new Vec3(pose.aim.x, pose.aim.y, pose.aim.z), fast ? 1.3 : 2.6);
+  }
+
+  /** Vuela a un objetivo: oblicua desde el lado de la batería, mirándolo. */
+  frameTarget(targetEnu: Vec3, fast = false): void {
+    this.ensureFree();
+    const range = Math.hypot(targetEnu.x, targetEnu.y);
+    const azBT = range > 1 ? Math.atan2(targetEnu.x, targetEnu.y) : 0;
+    const d = clamp(range * 0.1, 650, 3500);
+    const a = azBT + Math.PI + (22 * Math.PI) / 180; // desde la batería, algo de lado
+    const elev = (33 * Math.PI) / 180;
+    const eye = this.clampToTerrain(new Vec3(
+      targetEnu.x + Math.sin(a) * Math.cos(elev) * d,
+      targetEnu.y + Math.cos(a) * Math.cos(elev) * d,
+      targetEnu.z + Math.sin(elev) * d,
+    ), 30);
+    this.flyToPose(eye, targetEnu, fast ? 1.2 : 2.2);
+  }
+
+  /**
+   * Vuela hacia un punto del globo conservando rumbo (doble clic: se acerca
+   * con `rangeFactor` < 1; "centrar aquí": rangeFactor = 1).
+   */
+  flyToPoint(point: Cesium.Cartesian3, rangeFactor = 0.45, duration = 1.0): void {
+    this.ensureFree();
+    const cam = this.viewer.camera;
+    const range = Math.max(60, Cesium.Cartesian3.distance(cam.positionWC, point) * rangeFactor);
+    let pitch = cam.pitch;
+    if (pitch > -0.2) pitch = -0.6; // casi horizontal: mejor una oblicua de ~35º
+    cam.flyToBoundingSphere(new Cesium.BoundingSphere(point, 0), {
+      offset: new Cesium.HeadingPitchRange(cam.heading, pitch, range),
+      duration,
+      easingFunction: EASE,
+      complete: () => this.nudgeAboveTerrain(),
+    });
+  }
+
+  /** Norte arriba, conservando el punto de mira y la inclinación. */
+  northUp(): void {
+    this.ensureFree();
+    const cam = this.viewer.camera;
+    const c = this.viewCenter();
+    if (c) {
+      cam.flyToBoundingSphere(new Cesium.BoundingSphere(c, 0), {
+        offset: new Cesium.HeadingPitchRange(0, cam.pitch, Cesium.Cartesian3.distance(cam.positionWC, c)),
+        duration: 0.8,
+        easingFunction: EASE,
+      });
+    } else {
+      cam.flyTo({
+        destination: cam.positionWC.clone(),
+        orientation: { heading: 0, pitch: cam.pitch, roll: 0 },
+        duration: 0.6,
+        easingFunction: EASE,
+      });
+    }
+  }
+
+  /** Vista de planeamiento: cenital sobre el punto de mira. */
+  planView(): void {
+    this.ensureFree();
+    const cam = this.viewer.camera;
+    const c = this.viewCenter() ?? this.service.frame.origin;
+    const range = Math.max(400, Cesium.Cartesian3.distance(cam.positionWC, c));
+    cam.flyToBoundingSphere(new Cesium.BoundingSphere(c, 0), {
+      offset: new Cesium.HeadingPitchRange(cam.heading, -Cesium.Math.PI_OVER_TWO + 1e-3, range),
+      duration: 1.0,
+      easingFunction: EASE,
+    });
+  }
+
+  /** Zoom proporcional a la distancia (factor < 1 acerca). */
+  zoomBy(factor: number): void {
+    this.ensureFree();
+    const cam = this.viewer.camera;
+    const c = this.viewCenter();
+    if (c) {
+      const range = Math.max(40, Cesium.Cartesian3.distance(cam.positionWC, c) * factor);
+      cam.flyToBoundingSphere(new Cesium.BoundingSphere(c, 0), {
+        offset: new Cesium.HeadingPitchRange(cam.heading, cam.pitch, range),
+        duration: 0.45,
+        easingFunction: EASE,
+        complete: () => this.nudgeAboveTerrain(),
+      });
+    } else {
+      const h = cam.positionCartographic.height;
+      if (factor < 1) cam.zoomIn(h * (1 - factor));
+      else cam.zoomOut(h * (factor - 1));
+    }
+  }
+
+  /** Punto del globo en el centro del área de mapa (entre docks). */
+  private viewCenter(): Cesium.Cartesian3 | undefined {
+    const scene = this.viewer.scene;
+    const r = mapViewportRect();
+    const pos = new Cesium.Cartesian2((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    const ray = this.viewer.camera.getPickRay(pos);
+    if (scene.globe.show && ray) {
+      const p = scene.globe.pick(ray, scene);
+      if (p) return p;
+    }
+    if (scene.pickPositionSupported) {
+      const p = scene.pickPosition(pos);
+      if (Cesium.defined(p)) return p;
+    }
+    return this.viewer.camera.pickEllipsoid(pos) ?? undefined;
+  }
+
+  private flyToPose(eyeEnu: Vec3, aimEnu: Vec3, duration: number): void {
+    const frame = this.service.frame;
+    const dirEnu = aimEnu.sub(eyeEnu).normalized();
+    const upEnu = new Vec3(0, 0, 1);
+    const proj = upEnu.sub(dirEnu.mul(upEnu.dot(dirEnu)));
+    const upSafe = proj.length() > 1e-6 ? proj.normalized() : new Vec3(0, 1, 0);
+    this.viewer.camera.flyTo({
+      destination: frame.enuToEcef(eyeEnu),
+      orientation: {
+        direction: Cesium.Cartesian3.normalize(frame.enuVectorToEcef(dirEnu), new Cesium.Cartesian3()),
+        up: Cesium.Cartesian3.normalize(frame.enuVectorToEcef(upSafe), new Cesium.Cartesian3()),
+      },
+      duration,
+      easingFunction: EASE,
+      complete: () => this.nudgeAboveTerrain(),
+    });
+  }
+
+  /** Tras un vuelo (teselas ya cargadas): si quedó bajo el relieve, súbela. */
+  private nudgeAboveTerrain(): void {
+    if (this.mode !== 'free') return;
+    const globe = this.viewer.scene.globe;
+    if (!globe.show) return;
+    const cam = this.viewer.camera;
+    const carto = Cesium.Cartographic.fromCartesian(cam.positionWC, undefined, this.scratchCarto);
+    const h = carto ? globe.getHeight(carto) : undefined;
+    if (!carto || h === undefined) return;
+    const margin = TERRAIN_MARGIN.free;
+    if (carto.height - h < margin) {
+      cam.setView({
+        destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, h + margin),
+        orientation: { heading: cam.heading, pitch: cam.pitch, roll: cam.roll },
+      });
+    }
+  }
+
+  /** Sube `pos` (ENU) lo justo para quedar `margin` m sobre el terreno. */
+  private clampToTerrain(pos: Vec3, margin: number): Vec3 {
+    const globe = this.viewer.scene.globe;
+    if (!globe.show) return pos; // edificios 3D: el globo no está cargado
+    const ecef = this.service.frame.enuToEcef(pos, this.scratchC3);
+    const carto = Cesium.Cartographic.fromCartesian(ecef, undefined, this.scratchCarto);
+    if (!carto) return pos;
+    const h = globe.getHeight(carto);
+    if (h === undefined) return pos;
+    const above = carto.height - h;
+    return above >= margin ? pos : new Vec3(pos.x, pos.y, pos.z + (margin - above));
+  }
+
   update(dt: number): void {
     // Bullet-time: rampa suave al acercarse el impacto del proyectil seguido.
     if (this.tracked) {
@@ -271,6 +504,7 @@ export class CameraDirector {
     }
 
     if (this.mode === 'fps') this.tickFps(dt);
+    else if (this.mode === 'follow') this.tickFollow(dt);
     else if (this.mode !== 'free') this.tickMode(dt);
     this.tickShake(dt);
   }
@@ -299,7 +533,91 @@ export class CameraDirector {
       const sprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 4 : 1;
       this.fpsPos = this.fpsPos.add(move.normalized().mul(this.fpsSpeed * sprint * dt));
     }
+    this.fpsPos = this.clampToTerrain(this.fpsPos, TERRAIN_MARGIN.fps);
     this.applyView(this.fpsPos, this.fpsPos.add(look));
+  }
+
+  /**
+   * Seguir: cámara = proyectil + OFFSET suavizado (rumbo y offset se
+   * amortiguan; la posición del proyectil no) → cero retraso aun a Mach 5
+   * y cero temblor. Al impactar, vista de impacto cinematográfica.
+   */
+  private tickFollow(dt: number): void {
+    const t = this.tracked;
+    if (!t) return;
+    if (t.isImpacted) {
+      this.tickImpactView(dt, t);
+      return;
+    }
+    this.impactView = null;
+    const p = t.positionEnu();
+    const v = t.velocityEnu();
+    const speed = Math.max(1, v.length());
+    const dir = v.div(speed);
+    const horiz = Math.hypot(v.x, v.y);
+    // Rumbo del proyectil (con tiro casi vertical se conserva el anterior).
+    const headingTarget = horiz > 2 ? (Math.atan2(v.x, v.y) * 180) / Math.PI : (this.fHeadingDeg ?? 0);
+    this.fHeadingDeg = this.fHeadingDeg === null
+      ? headingTarget
+      : smoothAngleDeg(this.fHeadingDeg, headingTarget, smoothK(3.0, dt));
+    const dist = Math.min(500, 90 + speed * 0.35) * this.followZoom;
+    const yaw = ((this.fHeadingDeg + 180 + this.followYawDeg) * Math.PI) / 180;
+    const pitch = ((16 + this.followPitchDeg) * Math.PI) / 180;
+    const desired: P3 = {
+      x: Math.sin(yaw) * Math.cos(pitch) * dist,
+      y: Math.cos(yaw) * Math.cos(pitch) * dist,
+      z: Math.sin(pitch) * dist,
+    };
+    if (!this.fOffset) {
+      // Entra desde donde esté la cámara: barrido suave hasta el offset.
+      const cam = this.service.frame.ecefToEnu(this.viewer.camera.positionWC);
+      this.fOffset = { x: cam.x - p.x, y: cam.y - p.y, z: cam.z - p.z };
+    }
+    lerp3(this.fOffset, desired, smoothK(this.stiffness * 1.5, dt), this.fOffset);
+    const leadDesired: P3 = {
+      x: dir.x * Math.min(250, speed * 0.25),
+      y: dir.y * Math.min(250, speed * 0.25),
+      z: dir.z * Math.min(250, speed * 0.25),
+    };
+    if (!this.fLead) this.fLead = { ...leadDesired };
+    lerp3(this.fLead, leadDesired, smoothK(this.stiffness * 1.5, dt), this.fLead);
+
+    const eye = this.clampToTerrain(
+      new Vec3(p.x + this.fOffset.x, p.y + this.fOffset.y, p.z + this.fOffset.z),
+      TERRAIN_MARGIN.follow,
+    );
+    const aim = new Vec3(p.x + this.fLead.x, p.y + this.fLead.y, p.z + this.fLead.z);
+    this.smoothedPos = eye;
+    this.smoothedAim = aim;
+    this.applyView(eye, aim);
+  }
+
+  /** Órbita lenta y segura alrededor del estallido del proyectil seguido. */
+  private tickImpactView(dt: number, t: ProjectilePresenter): void {
+    if (!this.impactCinematic) return;
+    const camEnu = this.service.frame.ecefToEnu(this.viewer.camera.positionWC);
+    if (!this.impactView) {
+      const center = t.positionEnu();
+      this.impactView = {
+        center,
+        dist: impactViewDistanceM(t.flight.warheadTNTeq),
+        az: azimuthDeg(center, camEnu), // empieza desde donde ya está la cámara
+      };
+      this.smoothedPos = camEnu;
+      this.smoothedAim = this.smoothedAim ?? center;
+    }
+    const iv = this.impactView;
+    iv.az = (iv.az + 4.0 * dt) % 360; // órbita lenta
+    const pose = impactOrbitPose(
+      iv.center, iv.az + this.followYawDeg, iv.dist * this.followZoom,
+      clamp(14 + this.followPitchDeg * 0.5, 4, 60), 25 + Math.cbrt(Math.max(1, t.flight.warheadTNTeq)) * 6,
+    );
+    const desired = this.clampToTerrain(new Vec3(pose.eye.x, pose.eye.y, pose.eye.z), 12);
+    const aim = new Vec3(pose.aim.x, pose.aim.y, pose.aim.z);
+    const k = smoothK(1.4, dt);
+    this.smoothedPos = (this.smoothedPos ?? camEnu).add(desired.sub(this.smoothedPos ?? camEnu).mul(k));
+    this.smoothedAim = (this.smoothedAim ?? aim).add(aim.sub(this.smoothedAim ?? aim).mul(k));
+    this.applyView(this.clampToTerrain(this.smoothedPos, 10), this.smoothedAim);
   }
 
   private tickMode(dt: number): void {
@@ -317,26 +635,6 @@ export class CameraDirector {
           this.focusEnu.z + r * 0.35,
         );
         aim = this.focusEnu;
-        break;
-      }
-      case 'follow': {
-        if (!this.tracked) return;
-        const p = this.tracked.positionEnu();
-        const v = this.tracked.velocityEnu();
-        const speed = Math.max(1, v.length());
-        const dir = v.div(speed);
-        // Órbita esférica alrededor del proyectil: por defecto detrás y algo
-        // por encima; el usuario la gira arrastrando y la acerca con la rueda.
-        const heading = Math.atan2(dir.x, dir.y); // rumbo del proyectil
-        const dist = Math.min(500, 90 + speed * 0.35) * this.followZoom;
-        const yaw = heading + Math.PI + (this.followYawDeg * Math.PI) / 180;
-        const pitch = ((16 + this.followPitchDeg) * Math.PI) / 180;
-        desired = new Vec3(
-          p.x + Math.sin(yaw) * Math.cos(pitch) * dist,
-          p.y + Math.cos(yaw) * Math.cos(pitch) * dist,
-          p.z + Math.sin(pitch) * dist,
-        );
-        aim = p.add(dir.mul(Math.min(250, speed * 0.25))); // encuadra por delante
         break;
       }
       case 'drone': {
@@ -380,6 +678,7 @@ export class CameraDirector {
       default:
         return;
     }
+    desired = this.clampToTerrain(desired, TERRAIN_MARGIN[this.mode]);
 
     // La cabina y el OP siguen a la mano: rigidez extra para no flotar.
     const stiff =
