@@ -145,7 +145,7 @@ export class TrajectoryPreview {
     this.target = g(true);
     this.errorEllipse = g();
     this.challenge = g(true);
-    warmSymbols([SYM.aimpoint(), SYM.apex(), SYM.target(), SYM.challenge()]);
+    warmSymbols([SYM.aimpoint(token('--ua-accent'), 1, 42), SYM.apex(), SYM.target(1, 36), SYM.challenge()]);
   }
 
   /** MapInteraction instala su abanico de tiro: los anillos van a él. */
@@ -200,10 +200,10 @@ export class TrajectoryPreview {
     this.arc.entity({
       polyline: {
         positions,
-        width: 11,
+        width: 8,
         arcType: Cesium.ArcType.NONE,
         material: new Cesium.PolylineGlowMaterialProperty({
-          color: color.withAlpha(0.95), glowPower: 0.14, taperPower: 1.0,
+          color: color.withAlpha(0.95), glowPower: 0.2, taperPower: 1.0,
         }),
       },
     });
@@ -265,7 +265,7 @@ export class TrajectoryPreview {
 
     // Impacto previsto: retícula + ficha con los datos de la solución.
     const impactPos = frame.enuToEcef(result.impactPoint);
-    this.arc.billboard(impactPos, SYM.aimpoint(cssColor));
+    this.arc.billboard(impactPos, SYM.aimpoint(cssColor, 1, 42));
     const last = result.path[result.path.length - 1];
     const v = last.velocity;
     const fallDeg = (Math.atan2(-v.z, Math.hypot(v.x, v.y)) * 180) / Math.PI;
@@ -333,7 +333,7 @@ export class TrajectoryPreview {
     this.targetDesignation = `AB${this.targetSeq}`;
     const pos = this.frameOf().enuToEcef(targetEnu);
     const rb = this.rangeBearing(targetEnu);
-    this.target.billboard(pos, SYM.target());
+    this.target.billboard(pos, SYM.target(1, 36));
     this.target.label(pos, tagLabel(
       `OBJ ${this.targetDesignation}  ${formatDistance(rb.rangeM)} · ${formatMils(rb.bearingDeg)} mil`,
       { font: FONT_TAG, color: tokenColor('--ua-hostile'), origin: 'left', vertical: 'bottom', offset: new Cesium.Cartesian2(20, -10) },

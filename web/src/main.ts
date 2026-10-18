@@ -411,7 +411,7 @@ async function boot(): Promise<void> {
       },
       flyToBattery: () => flyToBattery(true),
       flyToTarget: () => {
-        if (piece.targetEnu) director.frameTarget(piece.targetEnu);
+        if (piece.targetEnu) void director.frameTarget(piece.targetEnu);
       },
       setCameraMode: (mode) => {
         // Mismo comportamiento que los botones de cámara del panel.
@@ -565,7 +565,7 @@ async function boot(): Promise<void> {
   // -- Cámara inicial ----------------------------------------------------------
   function flyToBattery(fast: boolean): void {
     // === V2:MAP === encuadre de batería: arma en primer plano, mirando aguas abajo
-    director.frameBattery(fast);
+    void director.frameBattery(fast);
     // === fin V2:MAP ===
   }
   flyToBattery(false);

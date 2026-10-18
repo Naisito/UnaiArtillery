@@ -204,6 +204,16 @@ describe('cámaras', () => {
     }
   });
 
+  it('con el ojo subido por el relieve, el cabeceo mantiene el arma en plano', () => {
+    for (const off of [15, -15, 35, -35]) {
+      const pose = batteryFramingPose(200, 10, { offsetDeg: off, eyeZ: 45 });
+      const gun = viewAngles(pose, { x: 0, y: 0, z: 1.5 });
+      expect(gun.upDeg).toBeGreaterThan(-12);
+      expect(gun.upDeg).toBeLessThan(-5);
+      expect(Math.abs(gun.rightDeg)).toBeLessThan(28);
+    }
+  });
+
   it('vista de impacto a distancia de seguridad', () => {
     expect(impactViewDistanceM(0)).toBe(260);
     expect(impactViewDistanceM(8)).toBeCloseTo(470, 0);

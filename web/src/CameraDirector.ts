@@ -32,8 +32,8 @@ import { Vec3, WeaponSystem } from './ballistics';
 import { BallisticsService } from './BallisticsService';
 import { ProjectilePresenter } from './ProjectilePresenter';
 import {
-  P3, azimuthDeg, batteryFramingPose, impactOrbitPose, impactViewDistanceM, lerp3, smoothAngleDeg,
-  smoothK,
+  FRAMING_OFFSETS_DEG, P3, azimuthDeg, batteryFramingPose, impactOrbitPose, impactViewDistanceM,
+  lerp3, smoothAngleDeg, smoothK,
 } from './map/cameraMath';
 import { mapViewportRect } from './map/dom';
 
@@ -103,6 +103,9 @@ export class CameraDirector {
 
   private readonly scratchCarto = new Cesium.Cartographic();
   private readonly scratchC3 = new Cesium.Cartesian3();
+  /** Turno de vuelo: un vuelo pedido después anula al que esperaba terreno. */
+  private flightSeq = 0;
+  private guardAcc = 0;
 
   constructor(
     private readonly viewer: Cesium.Viewer,
@@ -328,28 +331,97 @@ export class CameraDirector {
    * inferior izquierdo), vista oblicua baja mirando aguas abajo del tiro,
    * para que el arco y la zona de impacto entren en plano.
    */
-  frameBattery(fast = false): void {
+  async frameBattery(fast = false): Promise<void> {
     this.ensureFree();
+    const seq = ++this.flightSeq;
     const lay = this.aimProvider?.() ?? { azimuthDeg: 0, elevationDeg: 0 };
     const size = this.subjectSizeProvider?.() ?? 10;
-    const pose = batteryFramingPose(lay.azimuthDeg, size);
-    const eye = this.clampToTerrain(new Vec3(pose.eye.x, pose.eye.y, pose.eye.z), 1.5 + size * 0.2);
-    this.flyToPose(eye, new Vec3(pose.aim.x, pose.aim.y, pose.aim.z), fast ? 1.3 : 2.6);
+    const margin = 1.5 + size * 0.2;
+    // El ojo va a ras de suelo, detrás del arma: en una ladera el relieve
+    // puede quedar por ENCIMA o tapar el arma. Las teselas de destino aún no
+    // están cargadas (getHeight no sabe): se muestrea el terreno de verdad
+    // en cada oferta de posición (ojo + punto medio hacia el arma) y se
+    // elige la que menos obliga a subir; el cabeceo se recalcula para que
+    // el arma siga en plano.
+    const offers = FRAMING_OFFSETS_DEG.map((o) => batteryFramingPose(lay.azimuthDeg, size, { offsetDeg: o }));
+    const pts: Vec3[] = [];
+    for (const p of offers) {
+      pts.push(new Vec3(p.eye.x, p.eye.y, 0), new Vec3(p.eye.x * 0.5, p.eye.y * 0.5, 0));
+    }
+    const ground = await this.sampleGroundZ(pts);
+    if (seq !== this.flightSeq) return; // otro vuelo pedido entretanto
+    let best = 0;
+    let bestNeed = Infinity;
+    offers.forEach((p, i) => {
+      const gEye = ground[2 * i];
+      const gMid = ground[2 * i + 1];
+      let need = 0;
+      if (gEye !== null) need = Math.max(need, gEye + margin - p.eye.z);
+      // Línea de visión al arma: el punto medio del rayo, por encima del suelo.
+      if (gMid !== null) need = Math.max(need, 2 * (gMid + 1.5) - 0.15 * size - p.eye.z);
+      if (need < bestNeed - 3) {
+        bestNeed = need;
+        best = i;
+      }
+    });
+    const lift = Number.isFinite(bestNeed) ? Math.max(0, bestNeed) : 0;
+    const pose = batteryFramingPose(lay.azimuthDeg, size, {
+      offsetDeg: FRAMING_OFFSETS_DEG[best],
+      eyeZ: offers[best].eye.z + lift,
+    });
+    // OJO: nada de globe.getHeight aquí — en el destino solo hay teselas de
+    // bajo detalle (desde el espacio pueden errar >1 km). Manda el muestreo.
+    this.flyToPose(
+      new Vec3(pose.eye.x, pose.eye.y, pose.eye.z), new Vec3(pose.aim.x, pose.aim.y, pose.aim.z),
+      fast ? 1.3 : 2.6,
+    );
+  }
+
+  /**
+   * z ENU del terreno bajo cada punto (máximo detalle). null si no se pudo
+   * (sin terreno, edificios 3D o más de `timeoutMs`).
+   */
+  private async sampleGroundZ(points: Vec3[], timeoutMs = 1500): Promise<(number | null)[]> {
+    const scene = this.viewer.scene;
+    const provider = this.viewer.terrainProvider;
+    if (!scene.globe.show || provider instanceof Cesium.EllipsoidTerrainProvider) {
+      return points.map(() => null);
+    }
+    const frame = this.service.frame;
+    const cartos = points.map((p) => Cesium.Cartographic.fromCartesian(frame.enuToEcef(p)));
+    try {
+      const sampled = await Promise.race([
+        Cesium.sampleTerrainMostDetailed(provider, cartos),
+        new Promise<null>((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+      if (!sampled) return points.map(() => null);
+      return sampled.map((c) =>
+        Number.isFinite(c.height)
+          ? frame.ecefToEnu(Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height)).z
+          : null,
+      );
+    } catch {
+      return points.map(() => null);
+    }
   }
 
   /** Vuela a un objetivo: oblicua desde el lado de la batería, mirándolo. */
-  frameTarget(targetEnu: Vec3, fast = false): void {
+  async frameTarget(targetEnu: Vec3, fast = false): Promise<void> {
     this.ensureFree();
+    const seq = ++this.flightSeq;
     const range = Math.hypot(targetEnu.x, targetEnu.y);
     const azBT = range > 1 ? Math.atan2(targetEnu.x, targetEnu.y) : 0;
     const d = clamp(range * 0.1, 650, 3500);
     const a = azBT + Math.PI + (22 * Math.PI) / 180; // desde la batería, algo de lado
     const elev = (33 * Math.PI) / 180;
-    const eye = this.clampToTerrain(new Vec3(
+    let eye = new Vec3(
       targetEnu.x + Math.sin(a) * Math.cos(elev) * d,
       targetEnu.y + Math.cos(a) * Math.cos(elev) * d,
       targetEnu.z + Math.sin(elev) * d,
-    ), 30);
+    );
+    const [g] = await this.sampleGroundZ([eye]);
+    if (seq !== this.flightSeq) return;
+    if (g !== null && eye.z < g + 40) eye = new Vec3(eye.x, eye.y, g + 40);
     this.flyToPose(eye, targetEnu, fast ? 1.2 : 2.2);
   }
 
@@ -359,6 +431,7 @@ export class CameraDirector {
    */
   flyToPoint(point: Cesium.Cartesian3, rangeFactor = 0.45, duration = 1.0): void {
     this.ensureFree();
+    ++this.flightSeq;
     const cam = this.viewer.camera;
     const range = Math.max(60, Cesium.Cartesian3.distance(cam.positionWC, point) * rangeFactor);
     let pitch = cam.pitch;
@@ -460,11 +533,15 @@ export class CameraDirector {
     });
   }
 
-  /** Tras un vuelo (teselas ya cargadas): si quedó bajo el relieve, súbela. */
+  /**
+   * Si la cámara quedó bajo el relieve, súbela. Solo con las teselas de la
+   * vista ya cargadas: con teselas gruesas (recién llegados del espacio)
+   * getHeight puede errar más de un kilómetro y la "subiría" al cielo.
+   */
   private nudgeAboveTerrain(): void {
     if (this.mode !== 'free') return;
     const globe = this.viewer.scene.globe;
-    if (!globe.show) return;
+    if (!globe.show || !globe.tilesLoaded) return;
     const cam = this.viewer.camera;
     const carto = Cesium.Cartographic.fromCartesian(cam.positionWC, undefined, this.scratchCarto);
     const h = carto ? globe.getHeight(carto) : undefined;
@@ -506,6 +583,15 @@ export class CameraDirector {
     if (this.mode === 'fps') this.tickFps(dt);
     else if (this.mode === 'follow') this.tickFollow(dt);
     else if (this.mode !== 'free') this.tickMode(dt);
+    else {
+      // Red de seguridad del modo libre (4 Hz): vuelos/setView ajenos a la
+      // colisión de Cesium nunca dejan la cámara bajo el relieve.
+      this.guardAcc += dt;
+      if (this.guardAcc > 0.25) {
+        this.guardAcc = 0;
+        this.nudgeAboveTerrain();
+      }
+    }
     this.tickShake(dt);
   }
 

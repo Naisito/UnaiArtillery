@@ -53,8 +53,10 @@ export class MeasureTool {
   private readonly ds = new Cesium.CustomDataSource('ua-measure');
   private readonly bbs: Cesium.BillboardCollection;
   private readonly lbs: Cesium.LabelCollection;
-  private readonly pls: Cesium.PolylineCollection;
-  private rubber: Cesium.Polyline | null = null;
+  /** Goma elástica A→cursor: 2 vértices dinámicos (CallbackProperty) con
+   *  tramo oculto punteado a través del relieve. */
+  private rubber: Cesium.Entity | null = null;
+  private rubberPositions: Cesium.Cartesian3[] = [];
   private hoverBb: Cesium.Billboard | null = null;
   private marks: Cesium.Billboard[] = [];
   private crestLabel: Cesium.Label | null = null;
@@ -88,7 +90,6 @@ export class MeasureTool {
 
     void viewer.dataSources.add(this.ds);
     const scene = viewer.scene;
-    this.pls = scene.primitives.add(new Cesium.PolylineCollection());
     this.bbs = scene.primitives.add(new Cesium.BillboardCollection({ scene }));
     this.lbs = scene.primitives.add(new Cesium.LabelCollection({ scene }));
 
@@ -230,19 +231,22 @@ export class MeasureTool {
       return;
     }
     const a = this.originPoint();
-    if (!this.rubber) {
-      this.rubber = this.pls.add({
-        width: 2,
-        material: Cesium.Material.fromType('PolylineDash', {
-          color: tokenColor('--ua-info', 0.95), dashLength: 14,
-        }),
-      });
-    }
     const lift = (p: Cesium.Cartesian3) => {
       const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(p, new Cesium.Cartesian3());
       return Cesium.Cartesian3.add(p, Cesium.Cartesian3.multiplyByScalar(up, 3, up), new Cesium.Cartesian3());
     };
-    this.rubber.positions = [lift(a.ecef), lift(pt.ecef)];
+    this.rubberPositions = [lift(a.ecef), lift(pt.ecef)];
+    if (!this.rubber) {
+      this.rubber = this.ds.entities.add({
+        polyline: {
+          positions: new Cesium.CallbackProperty(() => this.rubberPositions, false),
+          width: 2.5,
+          arcType: Cesium.ArcType.NONE,
+          material: new Cesium.PolylineDashMaterialProperty({ color: tokenColor('--ua-info', 0.95), dashLength: 14 }),
+          depthFailMaterial: new Cesium.PolylineDashMaterialProperty({ color: tokenColor('--ua-info', 0.5), dashLength: 14 }),
+        },
+      });
+    }
     this.rubber.show = true;
     const g = vincentyInverse(a.latDeg, a.lonDeg, pt.latDeg, pt.lonDeg);
     this.hint.setSub(
@@ -259,8 +263,8 @@ export class MeasureTool {
     this.profile = null;
     this.profileEnds = null;
     this.ds.entities.removeAll();
+    this.rubber = null;
     this.clearMarks();
-    if (this.rubber) this.rubber.show = false;
     if (this.hoverBb) this.hoverBb.show = false;
     this.card.classList.remove('show');
     this.hint.hideMode();
@@ -327,6 +331,7 @@ export class MeasureTool {
 
     // Geometría en el mapa: extremos y trayecto drapeado.
     this.ds.entities.removeAll();
+    this.rubber = null;
     this.clearMarks();
     if (this.origin) this.mark(a.ecef, SYM.dot(token('--ua-info'), 'A', 20));
     this.mark(b.ecef, SYM.dot(token('--ua-info'), 'B', 20));
@@ -502,7 +507,6 @@ export class MeasureTool {
   dispose(): void {
     void this.viewer.dataSources.remove(this.ds, true);
     const prims = this.viewer.scene.primitives;
-    prims.remove(this.pls);
     prims.remove(this.bbs);
     prims.remove(this.lbs);
     this.card.remove();

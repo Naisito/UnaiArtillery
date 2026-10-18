@@ -138,7 +138,7 @@
 .ua-ms-credits {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 220px;
+  max-width: 300px;
   display: flex;
   align-items: center;
   padding: 0 var(--ua-sp-2) 0 var(--ua-sp-3);
@@ -165,11 +165,11 @@
   margin: 0;
   font-family: var(--ua-font-ui);
   font-size: 10px;
-  line-height: 12px;
+  line-height: 10.5px;
   color: var(--ua-text-3);
   text-shadow: none;
   background: transparent;
-  max-height: calc(var(--ua-statusbar-h) - 4px);
+  max-height: calc(var(--ua-statusbar-h) - 1px);
   overflow: hidden;
 }
 .ua-ms-credits .cesium-credit-logoContainer { display: inline-flex !important; align-items: center; order: 0; }
@@ -193,9 +193,18 @@
 .ua-ms-credits a:hover,
 .ua-ms-credits .cesium-credit-expand-link:hover { color: var(--ua-text-1); text-decoration: underline; }
 
+/* MGRS apilado bajo lat/lon (solo en anchos estrechos). */
+.ua-ms-ll-mgrs { display: none; color: var(--ua-text-2); }
+
 /* Anchos estrechos: se sacrifica lo secundario, nunca los créditos. */
 @container uastatus (max-width: 1080px) {
   .ua-ms-val .sec { display: none; }
+}
+@container uastatus (max-width: 960px) {
+  .ua-ms-ll .ua-ms-cap { display: none; }
+  .ua-ms-ll .ua-ms-val { line-height: 13px; }
+  .ua-ms-ll-mgrs { display: block; }
+  .ua-ms-mgrs { display: none; }
 }
 @container uastatus (max-width: 980px) {
   .ua-ms-state { font-size: 0; gap: 0; }
@@ -383,7 +392,7 @@
     linear-gradient(20deg, transparent 55%, color-mix(in srgb, var(--ua-text-3) 50%, transparent) 55% 58%, transparent 58%),
     var(--ua-bg-0);
 }
-.ua-layer-name { display: flex; align-items: center; justify-content: space-between; padding: 0 2px; }
+.ua-layer-name { display: flex; flex-direction: column; gap: 1px; padding: 0 2px; line-height: 1.2; }
 .ua-layer-name small { color: var(--ua-text-3); font-size: 10px; }
 .ua-pop-sep { height: 1px; background: var(--ua-border); margin: var(--ua-sp-3) 0; }
 .ua-toggle-row {

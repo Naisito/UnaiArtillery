@@ -246,7 +246,12 @@ export class RangeFanLayer {
   private placeDynamic(): void {
     if (!(this.maxM > 0)) return;
     const frame = this.frameOf();
-    const az = this.layDeg + 2.2; // un pelo a la derecha de la línea de tiro
+    // Rótulos lejos de la línea de tiro (donde viven el arco, el objetivo y
+    // sus fichas): junto al límite izquierdo del sector, o a 90º a la
+    // derecha de la línea de tiro si el arma gira 360º.
+    const az = isSectorLimited(this.traverseDeg) && this.centerDeg !== null
+      ? this.centerDeg - this.traverseDeg / 2 + Math.min(2.5, this.traverseDeg * 0.08)
+      : this.layDeg + 90;
     for (const { label, r } of this.ringLabels) {
       const p = polar(r, az);
       label.position = frame.enuToEcef(new Vec3(p.x, p.y, curvatureDropZ(r)));

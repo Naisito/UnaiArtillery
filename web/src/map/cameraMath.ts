@@ -32,32 +32,53 @@ export function subjectSizeForCategory(category: string): number {
   }
 }
 
+export interface FramingOptions {
+  /** Desvío del ojo respecto a "justo detrás" (º; + = detrás-derecha). */
+  offsetDeg?: number;
+  /** Cota del ojo (z ENU) si el relieve obliga a subirlo. */
+  eyeZ?: number;
+  /** Ángulo (º) por debajo del centro al que debe quedar el arma. */
+  gunBelowDeg?: number;
+}
+
+/** Ofertas de posición del ojo, por orden de preferencia (detrás-dcha primero). */
+export const FRAMING_OFFSETS_DEG = [15, -15, 35, -35];
+
 /**
- * Encuadre de batería: ojo detrás y a la derecha del arma, a poca altura;
- * mirada por el azimut de tiro con 4.5º de picado (horizonte en el tercio
- * superior, el arma en el inferior izquierdo, la línea de tiro hacia el
- * centro).
+ * Encuadre de batería: ojo detrás (y algo a un lado) del arma, a poca
+ * altura; la mirada va por el azimut de tiro y el cabeceo se calcula para
+ * que el arma quede ~8.5º bajo el centro (tercio inferior) aunque el
+ * relieve obligue a subir el ojo. En llano: horizonte en el tercio
+ * superior, arma abajo a la izquierda, línea de tiro hacia el centro.
  */
-export function batteryFramingPose(layAzDeg: number, sizeM: number): Pose {
+export function batteryFramingPose(layAzDeg: number, sizeM: number, opts: FramingOptions = {}): Pose {
   const s = Math.max(0.5, sizeM);
   const az = layAzDeg * RAD;
   const fwd = { x: Math.sin(az), y: Math.cos(az) };
-  const right = { x: Math.cos(az), y: -Math.sin(az) };
-  const back = 3.4 * s + 6;
-  const side = 1.1 * s;
-  const up = 0.75 * s + 2;
+  const off = opts.offsetDeg ?? 15;
+  const dist = 3.55 * s + 6.5;
+  const b = (layAzDeg + 180 - off) * RAD; // rumbo gun→ojo
   const eye: P3 = {
-    x: -fwd.x * back + right.x * side,
-    y: -fwd.y * back + right.y * side,
-    z: up,
+    x: Math.sin(b) * dist,
+    y: Math.cos(b) * dist,
+    z: opts.eyeZ ?? 0.75 * s + 2,
   };
+  // Horizontal: hacia un punto aguas abajo del tiro.
   const ahead = 60 * s;
-  const pitchDown = 4.5 * RAD;
-  const dist = ahead + back;
+  let hx = fwd.x * ahead - eye.x;
+  let hy = fwd.y * ahead - eye.y;
+  const hl = Math.hypot(hx, hy) || 1;
+  hx /= hl;
+  hy /= hl;
+  // Vertical: el arma (a media altura) ~8.5º bajo el centro.
+  const gunZ = 0.15 * s;
+  const depress = Math.atan2(eye.z - gunZ, dist) / RAD;
+  const pitch = Math.min(-2, Math.max(-40, -(depress - (opts.gunBelowDeg ?? 8.5)))) * RAD;
+  const L = ahead + dist;
   const aim: P3 = {
-    x: fwd.x * ahead,
-    y: fwd.y * ahead,
-    z: eye.z - Math.tan(pitchDown) * dist,
+    x: eye.x + hx * Math.cos(pitch) * L,
+    y: eye.y + hy * Math.cos(pitch) * L,
+    z: eye.z + Math.sin(pitch) * L,
   };
   return { eye, aim };
 }

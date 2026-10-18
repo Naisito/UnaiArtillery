@@ -37,6 +37,7 @@ export class StatusBar {
   readonly el: HTMLDivElement;
   private readonly llVal: HTMLSpanElement;
   private readonly mgrsVal: HTMLSpanElement;
+  private readonly llMgrs: HTMLSpanElement;
   private readonly elevVal: HTMLSpanElement;
   private readonly elevCap: HTMLSpanElement;
   private readonly rangeCell: HTMLDivElement;
@@ -78,6 +79,9 @@ export class StatusBar {
     llCell.title = 'Clic: alternar grados decimales / GMS';
     llCell.addEventListener('click', () => this.toggleFormat());
     this.llVal = llVal;
+    // En anchos estrechos la celda apila lat/lon y MGRS (sin rótulo).
+    this.llMgrs = el('span', 'ua-ms-val ua-ms-ll-mgrs');
+    llCell.appendChild(this.llMgrs);
     const [mgrsCell, , mgrsVal] = cell('ua-ms-mgrs', 'MGRS');
     this.mgrsVal = mgrsVal;
     const [elevCell, elevCap, elevVal] = cell('ua-ms-elev', 'Cota');
@@ -132,6 +136,7 @@ export class StatusBar {
     if (!r) {
       this.llVal.textContent = '— cursor fuera del mapa —';
       this.mgrsVal.textContent = '—';
+      this.llMgrs.textContent = '';
       this.elevVal.textContent = '—';
       this.distVal.textContent = '—';
       this.azVal.textContent = '';
@@ -142,6 +147,7 @@ export class StatusBar {
     }
     this.llVal.textContent = `${formatLat(r.latDeg, this.coordFormat)}  ${formatLon(r.lonDeg, this.coordFormat)}`;
     this.mgrsVal.textContent = r.mgrs ? formatMgrs(r.mgrs) : '—';
+    this.llMgrs.textContent = r.mgrs ? formatMgrs(r.mgrs) : '';
     this.elevCap.textContent = r.heightIsMsl ? 'Cota (MSL)' : 'Altura elip.';
     this.elevVal.textContent = r.heightM === null ? '—' : formatHeight(r.heightM);
     this.distVal.textContent = formatDistance(r.rangeM);
