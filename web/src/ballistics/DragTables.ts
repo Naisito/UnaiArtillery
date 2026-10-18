@@ -92,3 +92,42 @@ export function sectionalDensityLbIn2(massKg: number, diameterM: number): number
   const dIn = diameterM * M_TO_IN;
   return massLb / (dIn * dIn);
 }
+
+/**
+ * V2 · PHYS — búsqueda Cd(Mach) para el bucle caliente: tablas en
+ * Float64Array y el último tramo cacheado (el Mach cambia poco entre
+ * evaluaciones RK). Devuelve EXACTAMENTE lo mismo que sampleDragTable /
+ * Munition.dragCoefficient: elige el MISMO tramo (el menor k con
+ * mach <= mach[k]) y aplica la misma fórmula, así que el resultado es bit a
+ * bit idéntico.
+ */
+export class TableLookup {
+  private readonly m: Float64Array;
+  private readonly c: Float64Array;
+  private k = 1;
+
+  constructor(points: { mach: number; cd: number }[]) {
+    this.m = Float64Array.from(points, (p) => p.mach);
+    this.c = Float64Array.from(points, (p) => p.cd);
+  }
+
+  get length(): number { return this.m.length; }
+
+  value(mach: number): number {
+    const m = this.m, c = this.c, n = m.length;
+    if (mach <= m[0]) return c[0];
+    if (mach >= m[n - 1]) return c[n - 1];
+    let k = this.k;
+    if (k >= n) k = n - 1;
+    while (k < n - 1 && mach > m[k]) k++;
+    while (k > 1 && mach <= m[k - 1]) k--;
+    this.k = k;
+    const t = (mach - m[k - 1]) / (m[k] - m[k - 1]);
+    return c[k - 1] + t * (c[k] - c[k - 1]);
+  }
+}
+
+/** V2 — tabla paralela Mach → valor (coeficientes aerodinámicos MPM). */
+export function lookupOf(machs: number[], values: number[]): TableLookup {
+  return new TableLookup(machs.map((mach, i) => ({ mach, cd: values[i] })));
+}

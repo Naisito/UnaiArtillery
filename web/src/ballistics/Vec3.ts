@@ -42,4 +42,38 @@ export class Vec3 {
   }
 
   clone(): Vec3 { return new Vec3(this.x, this.y, this.z); }
+
+  // -- V2 · PHYS: rutas en el sitio (sin asignar) ------------------------------
+  //  La API inmutable de arriba no cambia; estas variantes mutan `this` y lo
+  //  devuelven, para bucles calientes que reutilizan un Vec3 de trabajo.
+
+  /** Fija las tres componentes (en el sitio). */
+  set(x: number, y: number, z: number): this {
+    this.x = x; this.y = y; this.z = z;
+    return this;
+  }
+
+  /** Copia otro vector (en el sitio). */
+  copyFrom(o: Vec3): this {
+    this.x = o.x; this.y = o.y; this.z = o.z;
+    return this;
+  }
+
+  /** this += o (en el sitio). */
+  addInPlace(o: Vec3): this {
+    this.x += o.x; this.y += o.y; this.z += o.z;
+    return this;
+  }
+
+  /** this += o·s (en el sitio). */
+  addScaledInPlace(o: Vec3, s: number): this {
+    this.x += o.x * s; this.y += o.y * s; this.z += o.z * s;
+    return this;
+  }
+
+  /** this *= s (en el sitio). */
+  scaleInPlace(s: number): this {
+    this.x *= s; this.y *= s; this.z *= s;
+    return this;
+  }
 }

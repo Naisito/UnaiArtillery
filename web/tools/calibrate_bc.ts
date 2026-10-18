@@ -22,6 +22,9 @@ function maxRange(w: Weapon, chargeIndex: number, spherical = false, maxFlight =
   const cfg = SolverConfig.with({
     dt, enableCoriolis: true, latitudeDeg: 40.0,
     sphericalEarth: spherical, maxFlight,
+    // V2 — el mismo integrador que usa la app (RK45: exacto en los apagados
+    // de motor y ~50× más rápido que el RK4 de paso fijo).
+    integrator: 'rk45',
   });
   const fc = new WeaponSystem(atmo, cfg);
   const v0 = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
@@ -45,31 +48,33 @@ interface Entry {
 }
 
 const ENTRIES: Entry[] = [
-  { key: 'mortar120', make: () => WeaponCatalog.mortar120(), chargeIndex: 3, targetM: 6367.3, bcLo: 0.8, bcHi: 4.0 },
-  { key: 'm777', make: () => WeaponCatalog.m777(), chargeIndex: 3, targetM: 20803.1, bcLo: 2.0, bcHi: 8.0 },
-  { key: 'm109', make: () => WeaponCatalog.m109Paladin(), chargeIndex: 3, targetM: 24000, bcLo: 2.0, bcHi: 12.0 },
+  // V2 · auditoría de datos (fuentes en WeaponCatalog.ts y docs/FISICA_WEB.md).
+  // M934A1 a carga 4 = 7.2 km; M795 a Z5 desde L39 = 22.5 km (M777A2 y
+  // M109A7 comparten tubo, proyectil y BC: M795_BC).
+  { key: 'mortar120', make: () => WeaponCatalog.mortar120(), chargeIndex: 4, targetM: 7200, bcLo: 0.8, bcHi: 5.0 },
+  { key: 'm777', make: () => WeaponCatalog.m777(), chargeIndex: 4, targetM: 22500, bcLo: 1.0, bcHi: 8.0 },
   { key: 'pion2s7', make: () => WeaponCatalog.pion2S7(), chargeIndex: 2, targetM: 37500, bcLo: 2.0, bcHi: 12.0 },
-  { key: 'excalibur', make: () => WeaponCatalog.excalibur(), chargeIndex: -1, targetM: 40000, bcLo: 4.0, bcHi: 60.0 },
+  { key: 'excalibur', make: () => WeaponCatalog.excalibur(), chargeIndex: 4, targetM: 37500, bcLo: 4.0, bcHi: 60.0 },
   { key: 'gmlrs', make: () => WeaponCatalog.himarsGMLRS(), chargeIndex: -1, targetM: 68381, bcLo: 3.0, bcHi: 16.0 },
   { key: 'm26', make: () => WeaponCatalog.m26MLRS(), chargeIndex: -1, targetM: 32000, bcLo: 1.0, bcHi: 12.0 },
   // P-PRO.4 — municiones 155 mm extendidas, calibradas desde un L39 (M109).
   {
     key: 'm795bb',
     make: () => {
-      const w = WeaponCatalog.m109Paladin();
+      const w = WeaponCatalog.m777();
       w.round = WeaponCatalog.m795BaseBleed();
       return w;
     },
-    chargeIndex: 3, targetM: 28500, bcLo: 1.5, bcHi: 16.0,
+    chargeIndex: 4, targetM: 28500, bcLo: 1.0, bcHi: 16.0,
   },
   {
     key: 'm549rap',
     make: () => {
-      const w = WeaponCatalog.m109Paladin();
+      const w = WeaponCatalog.m777();
       w.round = WeaponCatalog.m549Rap();
       return w;
     },
-    chargeIndex: 3, targetM: 30000, bcLo: 1.5, bcHi: 16.0,
+    chargeIndex: 4, targetM: 30100, bcLo: 1.0, bcHi: 16.0,
   },
   {
     key: 'ergmlrs', make: () => WeaponCatalog.erGMLRS(), chargeIndex: -1, targetM: 150000,

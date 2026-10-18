@@ -13,9 +13,10 @@
 //    * solveMRSI(): several rounds on different charges/branches timed so all
 //      of them impact within a fraction of a second.
 // ============================================================================
-import { Atmosphere } from './Atmosphere';
+import { Atmosphere, offsetWind } from './Atmosphere';
 import { BallisticsSolver, FlightResult, SolverConfig } from './BallisticsSolver';
 import { Weapon } from './WeaponCatalog';
+import type { Munition } from './Munition';
 import { Vec3 } from './Vec3';
 import { DeterministicRng } from './random';
 
@@ -105,6 +106,36 @@ export interface DispersionErrors {
   elevationStdMils?: number;
   /** Std deviation of an unreported steady wind, per horizontal axis (m/s). */
   windStd?: number;
+  /**
+   * V2 · PHYS — σ FRACCIONAL del arrastre ronda a ronda (forma, banda de
+   * forzamiento, espoleta, rugosidad): 0.004 = 0.4 %. Escala el BC (o la
+   * curva de Cd). Solo se sortea si es > 0 (las semillas viejas no cambian).
+   */
+  dragStd?: number;
+  /**
+   * V2 · PHYS — σ FRACCIONAL del impulso total del motor (cohetes, RAP,
+   * misiles): la fuente dominante del error en alcance de un cohete no
+   * guiado. Solo se sortea si es > 0 y la munición tiene motor.
+   */
+  impulseStd?: number;
+}
+
+/**
+ * V2 · PHYS — copia de la munición con el arrastre y el impulso perturbados
+ * (fracciones; +dragE = MENOS arrastre, +impulseE = más empuje).
+ */
+export function perturbRound(round: Munition, dragE: number, impulseE: number): Munition {
+  if (dragE === 0 && impulseE === 0) return round;
+  const r = round.clone();
+  if (dragE !== 0) {
+    if (r.dragModel === 'explicit') {
+      r.dragCurve = r.dragCurve.map((pt) => ({ mach: pt.mach, cd: pt.cd / (1 + dragE) }));
+    } else {
+      r.ballisticCoefficient *= 1 + dragE;
+    }
+  }
+  if (impulseE !== 0 && r.motor.enabled) r.motor.thrust *= 1 + impulseE;
+  return r;
 }
 
 export interface DispersionResult {
@@ -183,10 +214,11 @@ export class WeaponSystem {
     return this.solver.integrate(w.round, muzzlePos, v, targetEnu, order.fuze);
   }
 
-  /** Ground range achieved for a given elevation (helper for the solver). */
+  /** Ground range achieved for a given elevation (helper for the solver).
+   *  V2: integra sin guardar el camino (mismo alcance bit a bit). */
   rangeForElevation(w: Weapon, muzzlePos: Vec3, azimuthDeg: number, v0: number, elDeg: number): number {
     const v = WeaponSystem.launchVelocity(azimuthDeg, elDeg, v0);
-    return this.solver.integrate(w.round, muzzlePos, v).downrange;
+    return this.solver.integrateLight(w.round, muzzlePos, v).downrange;
   }
 
   /**
@@ -242,8 +274,11 @@ export class WeaponSystem {
     const sol = preferHighAngle ? bisect(hi, bestEl) : bisect(lo, bestEl);
     if (sol === null) return none;
 
-    const ord: FireOrder = { azimuthDeg, elevationDeg: sol, chargeIndex, v0Correction };
-    const fr = this.fire(w, muzzlePos, ord);
+    // TOF y velocidad de impacto no dependen del camino guardado (V2: ligero).
+    const frV = WeaponSystem.launchVelocity(
+      azimuthDeg, WeaponSystem.clampElevation(w, sol), v0,
+    );
+    const fr = this.solver.integrateLight(w.round, muzzlePos, frV);
     return {
       found: true,
       elevationDeg: sol,
@@ -296,12 +331,21 @@ export class WeaponSystem {
         rng.gaussian(0, errors.windStd ?? 0),
         0,
       );
+      // V2 — arrastre e impulso ronda a ronda (solo si se piden: así las
+      // salvas con semilla de antes reproducen exactamente lo mismo).
+      const dragE = (errors.dragStd ?? 0) > 0 ? rng.gaussian(0, errors.dragStd!) : 0;
+      const impE = (errors.impulseStd ?? 0) > 0 && w.round.motor.enabled
+        ? rng.gaussian(0, errors.impulseStd!) : 0;
+      const round = perturbRound(w.round, dragE, impE);
 
       const atmo = this.atmo.clone();
-      atmo.windField = (pos, t) => baseWind(pos, t).add(gust);
+      // V2 — mismo campo base + ráfaga, con evaluador escalar (sin asignar).
+      atmo.windField = offsetWind(baseWind, gust);
       const solver = new BallisticsSolver(atmo, this.cfg);
       const v = WeaponSystem.launchVelocity(az, el, v0);
-      const fr = solver.integrate(w.round, muzzlePos, v, undefined, order.fuze);
+      const fr = collectFlights
+        ? solver.integrate(round, muzzlePos, v, undefined, order.fuze)
+        : solver.integrateLight(round, muzzlePos, v, undefined, order.fuze);
       impacts.push(fr.impactPoint);
       if (collectFlights) flights.push(fr);
     }
@@ -347,16 +391,15 @@ export class WeaponSystem {
     const alongDir = new Vec3(Math.sin(az), Math.cos(az), 0);
     const crossDir = new Vec3(Math.cos(az), -Math.sin(az), 0); // derecha del rumbo
 
-    const fly = (v0x: number, elx: number, extraWind?: Vec3): FlightResult => {
+    const fly = (v0x: number, elx: number, extraWind?: Vec3, round: Munition = w.round): FlightResult => {
       let solver = this.solver;
       if (extraWind) {
         const atmo = this.atmo.clone();
-        const base = this.atmo.windField;
-        atmo.windField = (pos, t) => base(pos, t).add(extraWind);
+        atmo.windField = offsetWind(this.atmo.windField, extraWind);
         solver = new BallisticsSolver(atmo, this.cfg);
       }
       const v = WeaponSystem.launchVelocity(order.azimuthDeg, elx, v0x);
-      return solver.integrate(w.round, muzzlePos, v);
+      return solver.integrateLight(round, muzzlePos, v);
     };
     const alongOf = (fr: FlightResult) =>
       fr.impactPoint.x * alongDir.x + fr.impactPoint.y * alongDir.y;
@@ -383,8 +426,21 @@ export class WeaponSystem {
     const sAzRad = ((errors.azimuthStdMils ?? 0) * MILS_TO_DEG * Math.PI) / 180.0;
     const sW = errors.windStd ?? 0;
 
+    // V2 — sensibilidades al arrastre y al impulso (centradas, ±1 %), solo
+    // si esas fuentes están activas (2 integraciones más cada una).
+    const sDrag = errors.dragStd ?? 0;
+    const sImp = w.round.motor.enabled ? errors.impulseStd ?? 0 : 0;
+    const dRdDrag = sDrag > 0
+      ? (alongOf(fly(v0, el, undefined, perturbRound(w.round, 0.01, 0))) -
+          alongOf(fly(v0, el, undefined, perturbRound(w.round, -0.01, 0)))) / 0.02
+      : 0;
+    const dRdImp = sImp > 0
+      ? (alongOf(fly(v0, el, undefined, perturbRound(w.round, 0, 0.01))) -
+          alongOf(fly(v0, el, undefined, perturbRound(w.round, 0, -0.01)))) / 0.02
+      : 0;
+
     return {
-      sigmaRangeM: Math.hypot(dRdV * sV0, dRdEl * sQEdeg, sWl * sW),
+      sigmaRangeM: Math.hypot(dRdV * sV0, dRdEl * sQEdeg, sWl * sW, dRdDrag * sDrag, dRdImp * sImp),
       sigmaCrossM: Math.hypot(R * sAzRad, sWt * sW),
       rangeM: R,
     };

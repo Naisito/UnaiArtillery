@@ -1,0 +1,59 @@
+{
+  "profile": "base (RK4 paso fijo, Vec3 inmutable)",
+  "results": {
+    "fire-m777": {
+      "medianMs": 421.2003999999997,
+      "minMs": 275.7040000000002,
+      "reps": 5,
+      "bytes": 639663
+    },
+    "preview-m777": {
+      "medianMs": 152.04349999999977,
+      "minMs": 66.14789999999994,
+      "reps": 9,
+      "bytes": 320029
+    },
+    "preview-prsm": {
+      "medianMs": 634.5163000000002,
+      "minMs": 499.4467999999997,
+      "reps": 3,
+      "bytes": 1470606
+    },
+    "solve-target": {
+      "medianMs": 5678.0118000000075,
+      "minMs": 4923.139900000009,
+      "reps": 3,
+      "bytes": 97
+    },
+    "firing-table": {
+      "medianMs": 7593.020599999989,
+      "minMs": 7574.362899999978,
+      "reps": 3,
+      "bytes": 3598
+    },
+    "predict-disp": {
+      "medianMs": 382.18820000000414,
+      "minMs": 204.50870000000577,
+      "reps": 5,
+      "bytes": 66
+    },
+    "mrsi": {
+      "medianMs": 23003.536100000027,
+      "minMs": 20612.943900000013,
+      "reps": 3,
+      "bytes": 307
+    },
+    "salvo-6": {
+      "medianMs": 796.0617000000202,
+      "minMs": 602.8710999999894,
+      "reps": 3,
+      "bytes": 8725648
+    },
+    "ring-prsm": {
+      "medianMs": 2067.0885000000126,
+      "minMs": 1585.444599999988,
+      "reps": 3,
+      "bytes": 45
+    }
+  }
+}

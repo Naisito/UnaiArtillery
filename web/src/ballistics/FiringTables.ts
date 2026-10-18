@@ -50,6 +50,12 @@ export interface FiringTableOptions {
    * carga, desgaste, sesgo del radar). Default 1 (bit a bit lo de siempre).
    */
   v0Scale?: number;
+  /** V2 — integrador ('rk4' default, referencia; 'rk45' adaptativo, ~20× más rápido). */
+  integrator?: 'rk4' | 'rk45';
+  /** V2 — tolerancia del RK45. */
+  tolerance?: number;
+  /** V2 — modelo de giro (ver SolverConfig.spinModel). */
+  spinModel?: 'auto' | 'simple' | 'mpm';
 }
 
 export interface FiringTable {
@@ -72,15 +78,20 @@ export function generateFiringTable(
     latitudeDeg: opts.latitudeDeg ?? 40.0,
     anchorAltitudeM: opts.anchorAltitudeM ?? 0.0,
   });
+  if (opts.integrator) cfg.integrator = opts.integrator;
+  if (opts.tolerance !== undefined) cfg.tolerance = opts.tolerance;
+  if (opts.spinModel) cfg.spinModel = opts.spinModel;
   const solver = new BallisticsSolver(atmo, cfg);
   const scale = opts.v0Scale ?? 1.0;
   const v0Base = WeaponSystem.muzzleVelocity(w, { azimuthDeg: 0, elevationDeg: 45, chargeIndex });
   const v0 = scale === 1.0 ? v0Base : v0Base * scale; // V0 efectiva (P-VIVO.9)
 
   // Fire due North so "drift" reads directly as the East (+x) miss component.
+  // V2: sin guardar el camino (la fila solo lee alcance, TOF, impacto y la
+  // velocidad de salida de path[0], que siempre se conserva).
   const fireAt = (elDeg: number): FlightResult => {
     const v = WeaponSystem.launchVelocity(0.0, elDeg, v0);
-    return solver.integrate(w.round, new Vec3(), v);
+    return solver.integrateLight(w.round, new Vec3(), v);
   };
 
   // One sweep of the whole elevation envelope.

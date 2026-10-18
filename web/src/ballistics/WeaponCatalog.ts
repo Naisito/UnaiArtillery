@@ -17,6 +17,12 @@
 // ============================================================================
 import { Munition } from './Munition';
 
+/** BC (G7) de la M795 en L39 — compartido por M777A2 y M109A7 (mismo tubo y
+ *  proyectil ⇒ mismo alcance). Calibrado con tools/calibrate_bc.ts. */
+const M795_BC = 3.08;
+/** BC (G1) de la bomba M934A1 de 120 mm (7.2 km a carga 4). */
+const MORTAR_BC = 2.44;
+
 export type WeaponId =
   | 'mortar120' | 'm777' | 'm109' | 'pion2s7' | 'excalibur'
   | 'gmlrs' | 'm26' | 'ergmlrs' | 'tacticalMissile' | 'prsm'
@@ -63,24 +69,67 @@ export class Weapon {
 
 export class WeaponCatalog {
   // ==========================================================================
+  //  V2 · auditoría de datos — obuses 155 mm L39 (M777A2, M109A7).
+  //
+  //  La munición estándar de los L39 estadounidenses es la M795 HE (46.7 kg,
+  //  carga TNT 10.8 kg) disparada con MACS: M231 (zonas 1-2) y M232A1
+  //  (zonas 3-5). Alcance máximo publicado: 22.5 km (GD-OTS; ATP 3-09.50
+  //  tabla 1-1 da 22 km para el M109A6). NO hay tabla pública de V0 por zona
+  //  MACS: se usan las equivalencias publicadas con las cargas ensacadas del
+  //  M107 (ADA427052 + TM 43-0001-28): Z1 ≈ carga 4GB (322.9 m/s),
+  //  Z2 ≈ 6WB (482.0), Z3 ≈ 7WB (574.3), Z4 ≈ carga 8 (684.3) y Z5 ≈ 802 m/s
+  //  (M795 con M203A1/Z5, GD-OTS). Antes el catálogo disparaba el M107 a
+  //  684 m/s calibrado a 20.8 km (M777) y a 24 km (M109A7) — ambos fuera de
+  //  la realidad (M107 con carga 8 = 18.1 km).
+  // ==========================================================================
+
+  /** Zonas MACS de un obús 155 mm L39 (V0 aproximadas, ver arriba). */
+  static macsZones(): ChargeZone[] {
+    return [
+      { name: 'Zona 1 (M231)', muzzleVelocity: 323.0 },
+      { name: 'Zona 2 (M231)', muzzleVelocity: 482.0 },
+      { name: 'Zona 3 (M232A1)', muzzleVelocity: 574.0 },
+      { name: 'Zona 4 (M232A1)', muzzleVelocity: 684.0 },
+      { name: 'Zona 5 (M232A1, máx.)', muzzleVelocity: 802.0 },
+    ];
+  }
+
+  /** M795 HE 155 mm: casco de acero de alta fragmentación, culote boat-tail. */
+  static m795(): Munition {
+    const m = new Munition();
+    m.name = 'M795 155mm HE';
+    m.mass = 46.7;
+    m.diameter = 0.155;
+    m.muzzleVelocity = 802.0; // Z5 (solo se usa sin zonas)
+    m.warheadMassTNTeq = 10.8; // 10.8 kg de TNT (IMX-101 en la M795 IM)
+    m.dragModel = 'G7';
+    m.ballisticCoefficient = M795_BC; // calibrado: 22.5 km a Z5 (L39)
+    m.spinStabilized = true;
+    m.twistCalibers = 20.0; // estriado 1/20 calibres, dextrógiro
+    m.rightHandTwist = true;
+    return m;
+  }
+
+  // ==========================================================================
   //  P-PRO.4 — municiones 155 mm de alcance extendido (compartidas por los
   //  obuses L39: M777 y M109A7). BCs calibrados con tools/calibrate_bc.ts.
   // ==========================================================================
 
-  /** M795E-BB: proyectil base bleed (~28.5 km desde L39). El dragFactor 0.5
-   *  es un fit AGREGADO: además de rellenar la depresión del culote (base
-   *  drag ~25-35% del total), absorbe la mejora de forma del casco BB frente
-   *  al mismo casco sin BB — con él la ganancia on/off queda ~24%, dentro de
-   *  la banda publicada (M795 22.5 km → M795E-BB 28.5 km ≈ +27%). */
+  /** M795E1 HE-BB: M795 con generador base bleed (objetivo publicado 28.5 km
+   *  desde L39; la referencia en servicio es el M864, 28.18 km). El
+   *  dragFactor 0.5 es un fit AGREGADO: además de rellenar la depresión del
+   *  culote (base drag ~25-35% del total), absorbe la mejora de forma del
+   *  casco BB — con él la ganancia on/off queda ~24%, dentro de la banda
+   *  publicada (M795 22.5 km → 28.5 km ≈ +27%). */
   static m795BaseBleed(): Munition {
     const m = new Munition();
-    m.name = 'M795E-BB (base bleed)';
+    m.name = 'M795E1 HE-BB (base bleed)';
     m.mass = 46.7;
     m.diameter = 0.155;
-    m.muzzleVelocity = 684.0;
+    m.muzzleVelocity = 802.0;
     m.warheadMassTNTeq = 10.8; // IMX-101 ~10.8 kg
     m.dragModel = 'G7';
-    m.ballisticCoefficient = 4.67; // calibrado: ~28.5 km con BB activo (L39)
+    m.ballisticCoefficient = 2.70; // calibrado: 28.5 km con BB activo (L39, Z5)
     m.spinStabilized = true;
     m.twistCalibers = 20.0;
     m.rightHandTwist = true;
@@ -89,16 +138,17 @@ export class WeaponCatalog {
   }
 
   /** M549A1 RAP: cohete auxiliar de ~12 kN·s que enciende a los 7 s de vuelo
-   *  (~30 km desde L39). */
+   *  (30.1 km desde L39 con M203A1 a 826 m/s, TM 43-0001-28; calibrado a la
+   *  Z5 de 802 m/s, el BC absorbe la diferencia). */
   static m549Rap(): Munition {
     const m = new Munition();
     m.name = 'M549A1 RAP';
     m.mass = 43.5;
     m.diameter = 0.155;
-    m.muzzleVelocity = 684.0;
+    m.muzzleVelocity = 826.0;
     m.warheadMassTNTeq = 7.3; // ~6.8 kg Comp-B
     m.dragModel = 'G7';
-    m.ballisticCoefficient = 3.43; // calibrado: ~30 km con el motor (L39)
+    m.ballisticCoefficient = 2.76; // calibrado: 30.1 km con el motor (L39, Z5)
     m.spinStabilized = true;
     m.twistCalibers = 20.0;
     m.rightHandTwist = true;
@@ -195,25 +245,38 @@ export class WeaponCatalog {
         { mach: 2.0, cd: 0.30 },
       ];
     } else {
-      // Blunt fin-stabilized bomb: G1 shape. BC calibrated to ~6.4 km max
-      // (tools/calibrate_bc.ts). Fin-stabilized: no spin.
+      // V2 · auditoría: bomba M934A1 HE (≈14 kg, FM 3-22.90 / TM 43-0001-28)
+      // con cargas 0-4 a 101/165/220/270/318 m/s y alcance máximo publicado
+      // de 7.2 km (antes el BC daba 6.4 km). Bomba roma estabilizada por
+      // aletas: forma G1, sin giro. BC calibrado con tools/calibrate_bc.ts.
+      m.name = 'M934A1 120mm HE';
+      m.mass = 14.0;
       m.dragModel = 'G1';
-      m.ballisticCoefficient = 1.65;
+      m.ballisticCoefficient = MORTAR_BC;
     }
     const w = new Weapon();
     w.name = '120mm Heavy Mortar';
     w.category = 'Mortar';
-    w.minElevationDeg = 45.0; // mortars are high-angle weapons
+    // M120/M121: 710-1510 mils (≈40-85°). La legacy conserva 45° (paridad).
+    w.minElevationDeg = variant === 'legacy' ? 45.0 : 40.0;
     w.maxElevationDeg = 85.0;
     w.traverseDeg = 12.0;
-    w.reloadTime = 4.0;
+    w.reloadTime = 4.0; // 16 disparos el primer minuto, 4/min sostenidos
     w.round = m;
-    w.charges = [
-      { name: 'Charge 0', muzzleVelocity: 110.0 },
-      { name: 'Charge 2', muzzleVelocity: 190.0 },
-      { name: 'Charge 4', muzzleVelocity: 265.0 },
-      { name: 'Charge 6 (max)', muzzleVelocity: 318.0 },
-    ];
+    w.charges = variant === 'legacy'
+      ? [
+          { name: 'Charge 0', muzzleVelocity: 110.0 },
+          { name: 'Charge 2', muzzleVelocity: 190.0 },
+          { name: 'Charge 4', muzzleVelocity: 265.0 },
+          { name: 'Charge 6 (max)', muzzleVelocity: 318.0 },
+        ]
+      : [
+          { name: 'Carga 0', muzzleVelocity: 101.0 },
+          { name: 'Carga 1', muzzleVelocity: 165.0 },
+          { name: 'Carga 2', muzzleVelocity: 220.0 },
+          { name: 'Carga 3', muzzleVelocity: 270.0 },
+          { name: 'Carga 4 (máx.)', muzzleVelocity: 318.0 },
+        ];
     if (variant !== 'legacy') {
       // P-VIVO.8 — misión: HE / iluminación / humo (legacy pura para paridad).
       w.rounds = [m, WeaponCatalog.illum120(), WeaponCatalog.smoke120()];
@@ -251,9 +314,9 @@ export class WeaponCatalog {
     w.name = 'M777 155mm Howitzer';
     w.category = 'Howitzer';
     w.minElevationDeg = 0.0;
-    w.maxElevationDeg = 71.7;
-    w.traverseDeg = 45.0;
-    w.reloadTime = 8.0;
+    w.maxElevationDeg = 71.7; // 1275 mils
+    w.traverseDeg = 45.0;     // ±400 mils sobre la cureña inferior
+    w.reloadTime = 8.0;       // 4-5 disp/min máx., 2/min sostenidos
     w.round = m;
     w.charges = [
       { name: 'Charge 3', muzzleVelocity: 310.0 },
@@ -262,10 +325,13 @@ export class WeaponCatalog {
       { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
     ];
     if (variant !== 'legacy') {
-      // P-PRO.4 — munición seleccionable (la legacy queda pura para paridad).
-      // P-VIVO.8 añade las rondas de misión ILLUM y SMOKE.
+      // V2 · auditoría — M777A2 real: M795 con MACS (la legacy queda pura,
+      // M107 + cargas ensacadas, para la paridad con el núcleo C++).
+      w.round = WeaponCatalog.m795();
+      w.charges = WeaponCatalog.macsZones();
+      // P-PRO.4 — munición seleccionable. P-VIVO.8: ILLUM y SMOKE.
       w.rounds = [
-        m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap(),
+        w.round, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap(),
         WeaponCatalog.illum155(), WeaponCatalog.smoke155(),
       ];
     }
@@ -335,25 +401,31 @@ export class WeaponCatalog {
         { mach: 2.0, cd: 0.32 }, { mach: 4.0, cd: 0.26 }, { mach: 6.0, cd: 0.22 },
       ];
     } else {
-      // Solid motor with realistic specific impulse (~Isp 265 s, exhaust
-      // velocity ~2600 m/s): dv = 2600*ln(1670/740) ~ 2.1 km/s, leaving
-      // ~1.8 km/s after gravity+drag losses — a ~300 km-class ballistic arc.
-      // Burn 16 s at ~9 g initial acceleration.
-      m.motor.thrust = 151000.0;
+      // V2 · auditoría: es el MGM-140 ATACMS (610 mm). 1670 kg era el Block I
+      // (165 km); el de 300 km es el Block IA (M39A1), ~1320 kg con cabeza
+      // más ligera (designation-systems.net, CSIS). La masa de propulsante no
+      // es pública: con Isp ~265 s (c ≈ 2600 m/s) se elige para el mismo
+      // dv ideal ≈ 2.1 km/s de antes: 2600·ln(1320/588) — ~1.8 km/s al
+      // apagado tras pérdidas, arco balístico de clase 300 km. 16 s de
+      // combustión (~9 g iniciales).
+      m.name = 'MGM-140B ATACMS Block IA';
+      m.mass = 1320.0;
+      m.warheadMassTNTeq = 160.0; // ~300 submuniciones M74 APAM
+      m.motor.thrust = 119000.0;
       m.motor.burnTime = 16.0;
-      m.motor.propellantMass = 930.0;
+      m.motor.propellantMass = 732.0;
       m.dragModel = 'G7';
-      m.ballisticCoefficient = 11.56; // calibrated with tools/calibrate_bc.ts
+      m.ballisticCoefficient = 12.13; // calibrado: 300 km (Block IA, esférico, QE ≤ 60°)
       m.guidance.enabled = true;
       m.guidance.navConstant = 3.0;
       m.guidance.maxLateralG = 5.0;
       m.guidance.activationDelay = 5.0; // coast a bit after burnout
     }
     const w = new Weapon();
-    w.name = 'Tactical Ballistic Missile';
+    w.name = variant === 'legacy' ? 'Tactical Ballistic Missile' : 'M270A1 / ATACMS Block IA';
     w.category = 'Missile';
     w.minElevationDeg = 30.0;
-    w.maxElevationDeg = 80.0;
+    w.maxElevationDeg = variant === 'legacy' ? 80.0 : 60.0; // V2: el LLM de M270/HIMARS no pasa de 60°
     w.traverseDeg = 360.0;
     w.reloadTime = 20.0;
     w.round = m;
@@ -369,36 +441,24 @@ export class WeaponCatalog {
 
   // ---- M109A7 Paladin: obús autopropulsado 155 mm/L39 ----------------------
   // Mismo proyectil M107 que el M777; cañón L39 con cargas hasta ~684 m/s.
-  // Calibrado a ~24 km (banda publicada del sistema con munición asistida).
+  // V2 · auditoría: mismo cañón L39 (M284) y misma M795 con MACS que el
+  // M777A2 ⇒ mismo alcance (22-22.5 km; ATP 3-09.50). Antes: M107 a 684 m/s
+  // calibrado a 24 km, inconsistente con el M777 (mismo tubo y proyectil).
   static m109Paladin(): Weapon {
-    const m = new Munition();
-    m.name = 'M107 155mm HE (L39)';
-    m.mass = 43.2;
-    m.diameter = 0.155;
-    m.muzzleVelocity = 684.0;
-    m.warheadMassTNTeq = 6.6;
-    m.dragModel = 'G7';
-    m.ballisticCoefficient = 5.13; // calibrado: ~24 km
-    m.spinStabilized = true;
-    m.twistCalibers = 20.0; // estriado 1/20, dextrógiro
-    m.rightHandTwist = true;
-
     const w = new Weapon();
     w.name = 'M109A7 Paladin 155mm';
     w.category = 'Howitzer';
-    w.minElevationDeg = 0.0;
-    w.maxElevationDeg = 75.0;
+    w.minElevationDeg = -3.0;  // ≈ −53 mils
+    w.maxElevationDeg = 75.0;  // ≈ 1333 mils
     w.traverseDeg = 360.0; // torreta
-    w.reloadTime = 7.0;
-    w.round = m;
-    w.charges = [
-      { name: 'Charge 3', muzzleVelocity: 310.0 },
-      { name: 'Charge 5', muzzleVelocity: 470.0 },
-      { name: 'Charge 7', muzzleVelocity: 585.0 },
-      { name: 'Charge 8 (max)', muzzleVelocity: 684.0 },
+    w.reloadTime = 7.0;    // 4 disp/min máx. (3 min), 1/min sostenido
+    w.round = WeaponCatalog.m795();
+    w.charges = WeaponCatalog.macsZones();
+    // P-PRO.4 — mismas municiones que el M777 (ambos L39).
+    w.rounds = [
+      w.round, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap(),
+      WeaponCatalog.illum155(), WeaponCatalog.smoke155(),
     ];
-    // P-PRO.4 — mismas municiones extendidas que el M777 (ambos L39).
-    w.rounds = [m, WeaponCatalog.m795BaseBleed(), WeaponCatalog.m549Rap()];
     return w;
   }
 
@@ -426,26 +486,28 @@ export class WeaponCatalog {
     w.reloadTime = 15.0; // cadencia real ~1.5 disparos/min
     w.round = m;
     w.charges = [
-      { name: 'Carga reducida', muzzleVelocity: 550.0 },
-      { name: 'Carga intermedia', muzzleVelocity: 760.0 },
+      { name: 'Carga reducida (zona baja)', muzzleVelocity: 550.0 },
+      // V2 · auditoría: la carga reducida alcanza 25.4 km ⇒ ~710 m/s (est.).
+      { name: 'Carga reducida', muzzleVelocity: 710.0 },
       { name: 'Carga plena', muzzleVelocity: 960.0 },
     ];
     return w;
   }
 
   // ---- M982 Excalibur: 155 mm guiada ---------------------------------------
-  // 48 kg, base-bleed + planeo con canards (~40 km desde L39). El planeo no
-  // se modela: el BC calibrado lo absorbe (por eso i queda <0.3). Guiado
-  // Pro-Nav terminal, CEP <5 m con objetivo marcado.
+  // 48 kg, base-bleed + planeo con canards: 37.5 km desde L39 a Z5 (ATP
+  // 3-09.50; el "hasta 40 km" del fabricante es con tubo largo/Ib). El planeo
+  // no se modela: el BC calibrado lo absorbe (por eso i queda <0.3). Guiado
+  // Pro-Nav terminal, CEP <5 m con objetivo marcado. Se dispara con MACS.
   static excalibur(): Weapon {
     const m = new Munition();
     m.name = 'M982 Excalibur 155mm';
     m.mass = 48.0;
     m.diameter = 0.155;
-    m.muzzleVelocity = 684.0;
+    m.muzzleVelocity = 802.0;
     m.warheadMassTNTeq = 10.0; // PBXN-9 ~9.7 kg
     m.dragModel = 'G7';
-    m.ballisticCoefficient = 25.0; // calibrado: ~40 km (base-bleed + planeo)
+    m.ballisticCoefficient = 7.83; // calibrado: 37.5 km a Z5 (base-bleed + planeo)
     // Obturador deslizante: sale casi sin giro y vuela con canards.
     m.spinStabilized = false;
     m.guidance.enabled = true;
@@ -460,7 +522,7 @@ export class WeaponCatalog {
     w.traverseDeg = 45.0;
     w.reloadTime = 8.0;
     w.round = m;
-    w.charges = []; // se dispara a carga máxima para el alcance guiado
+    w.charges = WeaponCatalog.macsZones(); // V2: MACS como cualquier 155 L39
     return w;
   }
 
@@ -530,16 +592,19 @@ export class WeaponCatalog {
   static prsm(): Weapon {
     const m = new Munition();
     m.name = 'PrSM (clase 500 km)';
-    m.mass = 1400.0;
+    // V2 · auditoría: la masa no es oficial (816-900 kg en fuentes abiertas;
+    // 1400 kg era demasiado). Con Isp ~306 s (c ≈ 3000 m/s) y el mismo dv
+    // ideal ≈ 2.5 km/s: 3000·ln(900/391) ⇒ 509 kg de propulsante en 20 s.
+    m.mass = 900.0;
     m.diameter = 0.43;
     m.muzzleVelocity = 25.0;
-    m.warheadMassTNTeq = 200.0;
+    m.warheadMassTNTeq = 90.0; // cabeza unitaria de ~90 kg (clase)
     m.motor.enabled = true;
-    m.motor.thrust = 120000.0; // N (Isp ~306 s, dv ≈ 2.5 km/s)
+    m.motor.thrust = 76000.0;  // N (Isp ~306 s)
     m.motor.burnTime = 20.0;   // s
-    m.motor.propellantMass = 800.0;
+    m.motor.propellantMass = 509.0;
     m.dragModel = 'G7';
-    m.ballisticCoefficient = 14.02; // calibrado: ~500 km (esférico)
+    m.ballisticCoefficient = 17.39; // calibrado: ~500 km (esférico, QE ≤ 60°)
     m.guidance.enabled = true;
     m.guidance.navConstant = 3.0;
     m.guidance.maxLateralG = 5.0;
@@ -549,7 +614,7 @@ export class WeaponCatalog {
     w.name = 'PrSM (clase)';
     w.category = 'Missile';
     w.minElevationDeg = 30.0;
-    w.maxElevationDeg = 80.0;
+    w.maxElevationDeg = 60.0; // V2: el lanzador de HIMARS/M270 no pasa de 60°
     w.traverseDeg = 360.0;
     w.reloadTime = 25.0;
     w.round = m;

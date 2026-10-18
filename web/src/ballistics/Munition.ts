@@ -53,6 +53,43 @@ export interface BaseBleedSpec {
   dragFactor: number;  // Cd_efectivo = dragFactor·Cd mientras t < durationS
 }
 
+/**
+ * V2 · PHYS — datos del modelo de PUNTO-MASA MODIFICADO (STANAG 4355,
+ * McCoy cap. 9) de un proyectil estabilizado por giro. Con ellos el solver
+ * integra el spin p(t) con su amortiguamiento, calcula la guiñada de reposo
+ * de equilibrio giroscópico y de ella la sustentación, la fuerza Magnus y el
+ * arrastre inducido por guiñada (ver BallisticsSolver y FISICA_WEB.md).
+ * Tablas paralelas a `mach` (interpolación lineal, extremos clampados).
+ */
+export interface SpinAero {
+  /** Momento de inercia axial I_x (kg·m²). */
+  ixKgM2: number;
+  /** Momento de inercia transversal I_y (kg·m²): factor de estabilidad Sg. */
+  iyKgM2: number;
+  /** Nodos de Mach ascendentes. */
+  mach: number[];
+  /** C_Lα — pendiente de la fuerza de sustentación (1/rad). */
+  cla: number[];
+  /** C_Mα — momento de vuelco (1/rad; > 0 = estáticamente inestable). */
+  cma: number[];
+  /** C_Npα — fuerza Magnus (1/rad), convención STANAG/McCoy. */
+  cnpa: number[];
+  /** C_lp — amortiguamiento del giro (< 0). */
+  clp: number[];
+  /** C_Dδ² — arrastre inducido por la guiñada (1/rad²). */
+  cda2: number[];
+  /** Factor de ajuste de la sustentación f_L (STANAG; default 1). */
+  fL?: number;
+  /** Factor de ajuste del arrastre de guiñada Q_D (default 1). */
+  qD?: number;
+  /** Factor de ajuste de la fuerza Magnus Q_M (default 1). */
+  qM?: number;
+  /** Tope de |α_R| (rad): validez del modelo lineal. Default 0.30 (~17°). */
+  maxYawRad?: number;
+  /** Procedencia de los datos (para el informe/la UI). */
+  source?: string;
+}
+
 /** P1.5 — terminal guidance (proportional navigation) parameters. */
 export class GuidanceSpec {
   enabled = false;
@@ -123,6 +160,12 @@ export class Munition {
   magnusCoeff = 0.25;
   /** Spin decays as exp(-t/tau); shells keep most spin over a full flight. */
   spinDecayTau = 80.0;
+  /**
+   * V2 · PHYS — datos MPM (STANAG 4355). Presentes => con
+   * `SolverConfig.spinModel` 'auto' (default) o 'mpm' el solver usa el
+   * punto-masa modificado en vez de la deriva simplificada de P1.2.
+   */
+  aero?: SpinAero;
 
   // -- P1.5: guidance ----------------------------------------------------------
   guidance = new GuidanceSpec();
@@ -178,6 +221,7 @@ export class Munition {
     m.motor = this.motor.clone();
     m.guidance = this.guidance.clone();
     m.baseBleed = { ...this.baseBleed };
+    if (this.aero) m.aero = { ...this.aero };
     return m;
   }
 }
