@@ -9,7 +9,7 @@ import type { Weapon, WeaponId } from '../ballistics';
 import { PAINT, type ModelKit } from './kit';
 import type { ProjectileModel } from './rig';
 
-export function buildProjectile(kit: ModelKit, _weaponId: WeaponId, weapon: Weapon): ProjectileModel {
+export function buildProjectile(kit: ModelKit, _weaponId: WeaponId, weapon: Weapon, _variant: { tracer?: boolean } = {}): ProjectileModel {
   const d = weapon.round.diameter;
   const len = Math.max(d * 4.5, 0.03);
   const root = new THREE.Group();
