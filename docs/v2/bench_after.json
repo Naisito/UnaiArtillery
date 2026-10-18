@@ -1,0 +1,59 @@
+{
+  "profile": "V2 (RK45 Dormand–Prince, solver sin asignaciones, transporte empaquetado)",
+  "results": {
+    "fire-m777": {
+      "medianMs": 4.402499999999918,
+      "minMs": 1.2685000000000173,
+      "reps": 25,
+      "bytes": 128405
+    },
+    "preview-m777": {
+      "medianMs": 0.8958000000000084,
+      "minMs": 0.8007000000000062,
+      "reps": 25,
+      "bytes": 64394
+    },
+    "preview-prsm": {
+      "medianMs": 5.961399999999912,
+      "minMs": 3.43649999999991,
+      "reps": 25,
+      "bytes": 59359
+    },
+    "solve-target": {
+      "medianMs": 42.53189999999995,
+      "minMs": 30.0608000000002,
+      "reps": 25,
+      "bytes": 97
+    },
+    "firing-table": {
+      "medianMs": 102.10219999999981,
+      "minMs": 83.57920000000013,
+      "reps": 15,
+      "bytes": 3598
+    },
+    "predict-disp": {
+      "medianMs": 4.579099999999926,
+      "minMs": 3.2593000000006214,
+      "reps": 25,
+      "bytes": 66
+    },
+    "mrsi": {
+      "medianMs": 474.3289999999997,
+      "minMs": 264.0136000000002,
+      "reps": 4,
+      "bytes": 307
+    },
+    "salvo-6": {
+      "medianMs": 7.972099999999955,
+      "minMs": 4.983200000000579,
+      "reps": 25,
+      "bytes": 1747626
+    },
+    "ring-prsm": {
+      "medianMs": 6.900300000000243,
+      "minMs": 5.155399999999645,
+      "reps": 25,
+      "bytes": 45
+    }
+  }
+}

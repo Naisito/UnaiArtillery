@@ -79,7 +79,7 @@ function req(body: Record<string, unknown>): WorkerRequest {
   return { id: reqId++, muzzle: MUZZLE, atmo: ATMO, ...body } as unknown as WorkerRequest;
 }
 
-const P = benchProfiles();
+const P = benchProfiles(process.argv.includes('--base') ? 'base' : 'v2');
 
 const CASES: Case[] = [
   {
@@ -103,7 +103,7 @@ const CASES: Case[] = [
     build: () => req({
       op: 'solveTrajectory', weaponId: 'prsm',
       order: { azimuthDeg: 60, elevationDeg: 62, chargeIndex: -1 },
-      targetEnu: null, cfg: { ...BASE_CFG, ...P.preview, sphericalEarth: true },
+      targetEnu: null, cfg: { ...BASE_CFG, ...P.preview, sphericalEarth: true, ...(P.preview.integrator === 'rk45' ? { outputDt: 0.25 } : {}) },
       terrain: corridor(60, 520000),
     }),
   },

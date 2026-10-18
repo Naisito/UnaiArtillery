@@ -58,6 +58,14 @@ export class BallisticsService {
   muzzleHeightM = 3.0;
   /** Paso de integración para tiro/preview (el validado en tests). */
   dt = 0.005;
+  /** V2 · PHYS — integrador del núcleo ('rk45' adaptativo; 'rk4' = referencia). */
+  integrator: 'rk4' | 'rk45' = 'rk45';
+  /**
+   * V2 · PHYS — modelo de giro de las granadas estabilizadas por rotación:
+   * 'simple' (deriva P1.2) o 'mpm' / 'auto' (punto-masa modificado STANAG
+   * 4355 en las municiones con datos aerodinámicos).
+   */
+  spinModel: 'simple' | 'mpm' | 'auto' = 'simple';
   /** P-PRO.4 — munición seleccionada (índice en Weapon.rounds; 0 = estándar). */
   roundIndex = 0;
 
@@ -219,6 +227,18 @@ export class BallisticsService {
 
   getHumidity(): number { return this.atmo.relativeHumidity; }
 
+  /** V2 · PHYS — cambia el integrador (invalida cachés de alcance/tablas). */
+  setIntegrator(kind: 'rk4' | 'rk45'): void {
+    this.integrator = kind;
+    this.invalidateRangeCaches();
+  }
+
+  /** V2 · PHYS — modelo de giro (simple / STANAG 4355 MPM). */
+  setSpinModel(model: 'simple' | 'mpm' | 'auto'): void {
+    this.spinModel = model;
+    this.invalidateRangeCaches();
+  }
+
   /**
    * V2 · PHYS — columna meteorológica MEDIDA: temperatura (K) y/o humedad
    * (0..1) por altitud SOBRE EL NIVEL DEL MAR (OJO: el perfil de viento va
@@ -254,8 +274,20 @@ export class BallisticsService {
   }
 
   private makeConfigSpec(overrides: SolverConfigSpec = {}): SolverConfigSpec {
+    // V2 · PHYS — RK45 (Dormand–Prince) en TODAS las peticiones: preview,
+    // disparo, solución, tablas y dispersión usan el mismo integrador, así el
+    // arco previsto y el tiro real coinciden al centímetro (el RK4 de paso
+    // fijo arrastraba 7-48 m en el apagado de los motores) con 10-100× menos
+    // evaluaciones. Muestras del camino cada 5·dt (0.025 s en el disparo);
+    // en Tierra esférica (> 50 km) cada 0.25 s: el coste ya no es integrar
+    // sino convertir miles de muestras ECEF→ENU, y a ~2 km/s la flecha de la
+    // cuerda entre muestras es de ~8 cm (el preview diezma a 320 puntos).
+    const dt = overrides.dt ?? this.dt;
     return {
       dt: this.dt,
+      integrator: this.integrator,
+      outputDt: overrides.sphericalEarth ? Math.max(dt * 5, 0.25) : dt * 5,
+      spinModel: this.spinModel,
       latitudeDeg: this.frame.latDeg,
       anchorLonDeg: this.frame.lonDeg,
       enableCoriolis: true,
@@ -779,6 +811,7 @@ export class BallisticsService {
     const key = JSON.stringify({
       id, round: this.roundIndex, chargeIndex, stepM,
       atmo: this.atmoSpec(), lat: this.frame.latDeg,
+      integrator: this.integrator, spin: this.spinModel,
     });
     const hit = this.tableCache.get(key);
     if (hit) return hit;
