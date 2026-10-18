@@ -30,7 +30,7 @@ import * as THREE from 'three';
 import { PAINT } from '../kit';
 import type { PlatformBuilder, RigAnimState } from '../rig';
 import { buildRunningGear } from '../parts/tracks';
-import { bakeStatic, keep, latheCrisp, rod } from '../parts/tracked-geo';
+import { bakeStatic, extrudeSideExact, keep, latheCrisp, rod } from '../parts/tracked-geo';
 import * as D from '../parts/tracked-details';
 
 // --- Cotas (m), origen = eje de giro del LLM -------------------------------
@@ -60,13 +60,13 @@ export const buildM270: PlatformBuilder = (ctx) => {
   // ===========================================================================
   const hull = kit.group({ name: 'hull' });
   root.add(hull);
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [-0.55, HULL.belly], [5.45, HULL.belly], [HULL.nose, 1.08], [HULL.nose, 1.24], [6.02, HULL.deck],
     [HULL.rear, HULL.deck], [HULL.rear, 0.62],
-  ], HULL.halfLower * 2, paint, { bevel: 0.025 }));
-  hull.add(kit.extrudeSide([
+  ], HULL.halfLower * 2, paint, { chamfer: 0.025 }));
+  hull.add(extrudeSideExact(kit, [
     [HULL.rear, HULL.sponsonZ], [5.98, HULL.sponsonZ], [6.06, 1.3], [6.02, HULL.deck], [HULL.rear, HULL.deck],
-  ], HULL.halfUpper * 2, paint, { bevel: 0.03 }));
+  ], HULL.halfUpper * 2, paint, { chamfer: 0.03 }));
   // Pestañas de guardabarros y faldones.
   for (const s of [-1, 1]) {
     hull.add(kit.box(0.03, HULL.nose - HULL.rear - 0.3, 0.05, paint, { at: [s * (HULL.halfUpper + 0.005), (HULL.rear + 5.9) / 2, HULL.sponsonZ + 0.02] }));
@@ -78,7 +78,7 @@ export const buildM270: PlatformBuilder = (ctx) => {
   const cabSide: Array<[number, number]> = [
     [CAB.y0, HULL.deck], [CAB.y1, HULL.deck], [CAB.y1, 1.66], [5.66, 2.48], [5.55, CAB.z1], [CAB.y0, CAB.z1],
   ];
-  hull.add(kit.extrudeSide(cabSide, CAB.half * 2, paint, { bevel: 0.045 }));
+  hull.add(extrudeSideExact(kit, cabSide, CAB.half * 2, paint, { chamfer: 0.045 }));
   // Ventanas frontales (cristal) bajo persianas blindadas de lamas cerradas.
   {
     const a = new THREE.Vector2(5.66 - CAB.y1, 2.48 - 1.66);
@@ -123,6 +123,7 @@ export const buildM270: PlatformBuilder = (ctx) => {
   for (const s of [-1, 1]) {
     const x = s * (CAB.half + 0.01);
     hull.add(kit.box(0.025, 0.95, 0.95, paintSoft, { at: [x, 4.95, 1.98], bevel: 0.01 }));
+    D.seamRect(kit, hull, [x + s * 0.0125, 4.95, 1.98], 0.93, 0.93, 'x', s as 1 | -1);
     hull.add(kit.box(0.02, 0.5, 0.34, kit.glass(), { at: [x + s * 0.008, 5.05, 2.22] }));
     hull.add(kit.box(0.03, 0.56, 0.04, paint, { at: [x + s * 0.01, 5.05, 2.41] }));
     hull.add(kit.box(0.03, 0.56, 0.04, paint, { at: [x + s * 0.01, 5.05, 2.03] }));
@@ -159,6 +160,8 @@ export const buildM270: PlatformBuilder = (ctx) => {
     D.towHook(kit, hull, [s * 0.7, HULL.rear, 0.75], paint, 180);
   }
   hull.add(kit.box(1.0, 0.03, 0.55, paintSoft, { at: [0, HULL.rear - 0.015, 1.05], bevel: 0.01 }));
+  D.seamRect(kit, hull, [0, HULL.rear - 0.03, 1.05], 0.98, 0.53, 'y', -1);
+  D.towCable(kit, hull, [-(HULL.halfUpper + 0.02), -0.4, 1.33], [-(HULL.halfUpper + 0.02), 3.6, 1.33], -1);
   hull.add(kit.box(0.2, 0.14, 0.16, paint, { at: [0, HULL.rear - 0.07, 0.68], bevel: 0.015 }));
   // Cubierta trasera: rejillas del sistema de refrigeración y cajones bajos.
   D.louverPanel(kit, hull, [0.0, 3.25, HULL.deck + 0.012], 1.3, 0.8, 9, paint, { horizontal: true });

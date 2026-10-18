@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { PAINT } from '../kit';
 import type { PlatformBuilder } from '../rig';
 import { buildRunningGear } from '../parts/tracks';
-import { bakeStatic, keep, latheCrisp, loft, rod, type Ring } from '../parts/tracked-geo';
+import { bakeStatic, extrudeSideExact, keep, latheCrisp, loft, rod, type Ring } from '../parts/tracked-geo';
 import * as D from '../parts/tracked-details';
 
 // --- Cotas principales (m) ---------------------------------------------------
@@ -56,17 +56,17 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
   root.add(hull);
 
   // Casco inferior entre cadenas: vientre, placa frontal baja, nariz, glacis.
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [-2.4, HULL.belly], [HULL.lowNoseY, HULL.belly], [4.1, 1.05], [HULL.nose, HULL.noseZ],
     [HULL.glacisTop, HULL.deck], [HULL.rear, HULL.deck], [HULL.rear, 0.62],
-  ], HULL.halfLower * 2, paint, { bevel: 0.025 }));
+  ], HULL.halfLower * 2, paint, { chamfer: 0.025 }));
   // Casco superior (barcazas sobre las cadenas), siguiendo el glacis.
   const slope = (HULL.deck - HULL.noseZ) / (HULL.nose - HULL.glacisTop);
   const yAtZ = (z: number) => HULL.glacisTop + (HULL.deck - z) / slope;
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [HULL.rear, HULL.sponsonZ], [yAtZ(HULL.sponsonZ + 0.08) + 0.04, HULL.sponsonZ],
     [yAtZ(HULL.sponsonZ + 0.08), HULL.sponsonZ + 0.08], [HULL.glacisTop, HULL.deck], [HULL.rear, HULL.deck],
-  ], HULL.halfUpper * 2, paint, { bevel: 0.03 }));
+  ], HULL.halfUpper * 2, paint, { chamfer: 0.03 }));
 
   // Guardabarros delanteros sobre la motriz + faldón de goma.
   const yFender0 = yAtZ(HULL.sponsonZ + 0.08);
@@ -76,7 +76,7 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
     hull.add(kit.box(0.6, 0.03, 0.06, paint, { at: [x, yFender0 + 0.29, HULL.sponsonZ - 0.01], bevel: 0.01 }));
     hull.add(kit.box(0.56, 0.012, 0.14, kit.rubber(), { at: [x, yFender0 + 0.3, HULL.sponsonZ - 0.1] }));
     // Faldón trasero.
-    hull.add(kit.box(0.6, 0.012, 0.3, kit.rubber(), { at: [x, HULL.rear - 0.01, HULL.sponsonZ - 0.14] }));
+    hull.add(kit.box(0.52, 0.012, 0.18, kit.rubber(), { at: [x, HULL.rear - 0.01, HULL.sponsonZ - 0.09] }));
     // Canto del guardabarros lateral (pestaña).
     hull.add(kit.box(0.03, HULL.rear * -1 + yFender0, 0.05, paint, {
       at: [s * (HULL.halfUpper + 0.005), (HULL.rear + yFender0) / 2, HULL.sponsonZ + 0.02],
@@ -85,6 +85,12 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
 
   // Placa trasera: puerta de municionamiento con bisagras y cierre.
   hull.add(kit.box(1.12, 0.04, 0.92, paintSoft, { at: [0, HULL.rear - 0.02, 1.16], bevel: 0.012 }));
+  D.seamRect(kit, hull, [0, HULL.rear - 0.04, 1.16], 1.08, 0.88, 'y', -1);
+  // Estribo bajo la puerta y asideros laterales.
+  hull.add(kit.box(0.8, 0.22, 0.03, steel, { at: [0, HULL.rear - 0.12, 0.66] }));
+  for (const s of [-1, 1]) D.grabHandle(kit, hull, [s * 0.68, HULL.rear - 0.02, 0.95], [s * 0.68, HULL.rear - 0.02, 1.4], [0, -1, 0], steel, 0.06, 0.012);
+  // Cable de remolque en el costado izquierdo.
+  D.towCable(kit, hull, [-(HULL.halfUpper + 0.02), -2.3, 1.45], [-(HULL.halfUpper + 0.02), 1.7, 1.45], -1);
   for (const z of [0.85, 1.45]) hull.add(kit.cyl(0.03, 0.03, 0.2, paint, { axis: 'z', at: [0.6, HULL.rear - 0.04, z], segments: 10 }));
   hull.add(kit.box(0.08, 0.05, 0.22, steel, { at: [-0.42, HULL.rear - 0.05, 1.18] }));
   hull.add(kit.box(0.12, 0.05, 0.04, steel, { at: [-0.42, HULL.rear - 0.08, 1.18] }));
@@ -122,6 +128,8 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
   for (const dx of [-0.22, 0, 0.22]) D.periscope(kit, hull, [-0.62 + dx, 2.86, HULL.deck], paint, -dx * 60, 0.17);
   D.louverPanel(kit, hull, [0.5, 2.35, HULL.deck + 0.012], 0.85, 0.75, 9, paint, { horizontal: true });
   D.panel(kit, hull, [0.5, 1.75, HULL.deck + 0.008], [0.95, 0.45, 0.016], paintSoft);
+  D.seamRect(kit, hull, [0.5, 1.75, HULL.deck + 0.016], 0.95, 0.45, 'z', 1);
+  D.seamRect(kit, hull, [0.5, 2.35, HULL.deck + 0.004], 1.0, 0.92, 'z', 1);
   D.louverPanel(kit, hull, [HULL.halfUpper + 0.012, 2.75, 1.5], 0.55, 0.26, 4, paint, { yawDeg: -90 });
   hull.add(kit.box(0.02, 0.6, 0.3, kit.polymer(0x17150f), { at: [HULL.halfUpper + 0.005, 2.75, 1.5] }));
   D.pioneerTools(kit, hull, [-1.28, 2.25, HULL.deck], paint);
@@ -190,6 +198,7 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
   for (const s of [-1, 1]) {
     const x = s * (sideX(-0.7) + 0.012);
     traverse.add(kit.box(0.024, 1.0, 0.78, paintSoft, { at: [x, -0.7, 2.24], bevel: 0.008 }));
+    D.seamRect(kit, traverse, [x + s * 0.012, -0.7, 2.24], 0.98, 0.76, 'x', s as 1 | -1);
     for (const z of [1.98, 2.5]) traverse.add(kit.cyl(0.028, 0.028, 0.16, paint, { axis: 'z', at: [x + s * 0.02, -1.2, z], segments: 10 }));
     D.grabHandle(kit, traverse, [x, -0.32, 2.3], [x, -0.32, 2.1], [s, 0, 0], steel, 0.05, 0.01);
   }

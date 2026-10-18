@@ -273,6 +273,55 @@ export function boltRow(kit: ModelKit, parent: Obj, a: V3, b: V3, n: number, mat
   }
 }
 
+/**
+ * Junta perimetral oscura (rendija de puerta/trampilla) de w × h alrededor de
+ * `at`, sobre una cara cuya normal es ±`axis` (`sign` = lado hacia el que
+ * mira la cara). Lee a 10-30 m mucho mejor que un relieve del mismo color.
+ */
+export function seamRect(kit: ModelKit, parent: Obj, at: V3, w: number, h: number, axis: 'x' | 'y' | 'z', sign: 1 | -1, gap = 0.014): void {
+  const dark = kit.polymer(0x121310);
+  const d = 0.006;
+  const o = sign * 0.002;
+  if (axis === 'x') {
+    // Cara en el plano YZ: w a lo largo de Y, h a lo largo de Z.
+    parent.add(kit.box(d, w + gap, gap, dark, { at: [at[0] + o, at[1], at[2] + h / 2] }));
+    parent.add(kit.box(d, w + gap, gap, dark, { at: [at[0] + o, at[1], at[2] - h / 2] }));
+    parent.add(kit.box(d, gap, h, dark, { at: [at[0] + o, at[1] + w / 2, at[2]] }));
+    parent.add(kit.box(d, gap, h, dark, { at: [at[0] + o, at[1] - w / 2, at[2]] }));
+  } else if (axis === 'y') {
+    // Cara en el plano XZ: w a lo largo de X, h a lo largo de Z.
+    parent.add(kit.box(w + gap, d, gap, dark, { at: [at[0], at[1] + o, at[2] + h / 2] }));
+    parent.add(kit.box(w + gap, d, gap, dark, { at: [at[0], at[1] + o, at[2] - h / 2] }));
+    parent.add(kit.box(gap, d, h, dark, { at: [at[0] + w / 2, at[1] + o, at[2]] }));
+    parent.add(kit.box(gap, d, h, dark, { at: [at[0] - w / 2, at[1] + o, at[2]] }));
+  } else {
+    // Cara horizontal: w a lo largo de X, h a lo largo de Y.
+    parent.add(kit.box(w + gap, gap, d, dark, { at: [at[0], at[1] + h / 2, at[2] + o] }));
+    parent.add(kit.box(w + gap, gap, d, dark, { at: [at[0], at[1] - h / 2, at[2] + o] }));
+    parent.add(kit.box(gap, h, d, dark, { at: [at[0] + w / 2, at[1], at[2] + o] }));
+    parent.add(kit.box(gap, h, d, dark, { at: [at[0] - w / 2, at[1], at[2] + o] }));
+  }
+}
+
+/** Cable de remolque enrollado a lo largo de un costado (con ojales). */
+export function towCable(kit: ModelKit, parent: Obj, a: V3, b: V3, side: 1 | -1): void {
+  const steel = kit.steel(0x3c3a36, { roughness: 0.75, metalness: 0.6 });
+  const n = 6;
+  const pts: V3[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    pts.push([a[0] + (b[0] - a[0]) * t + side * 0.012 * Math.sin(t * Math.PI), a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t - 0.02 * Math.sin(t * Math.PI)]);
+  }
+  parent.add(kit.tube(pts, 0.016, steel, { segments: 24 }));
+  for (const p of [a, b]) {
+    parent.add(kit.torus(0.05, 0.016, steel, { axis: 'x', at: [p[0], p[1], p[2]], segments: 12 }));
+  }
+  // Abrazaderas.
+  for (const t of [0.33, 0.66]) {
+    parent.add(kit.box(0.04, 0.05, 0.06, steel, { at: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] }));
+  }
+}
+
 /** Placa de chapa en relieve (paneles de acceso): caja muy fina con chaflán. */
 export function panel(kit: ModelKit, parent: Obj, at: V3, size: V3, mat: THREE.Material, rotDeg: V3 = [0, 0, 0]): void {
   parent.add(kit.box(size[0], size[1], size[2], mat, { at, rotDeg, bevel: Math.min(size[0], size[1], size[2]) * 0.45 }));

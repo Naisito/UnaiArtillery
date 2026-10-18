@@ -146,6 +146,52 @@ export function loft(kit: ModelKit, rings: Ring[], mat: THREE.Material, opts: Pl
 }
 
 /**
+ * Desplaza un polígono 2D hacia DENTRO una distancia `d` (inglete). Válido
+ * para d pequeño frente a la longitud de los lados.
+ */
+export function insetPolygon(poly: Array<[number, number]>, d: number): Array<[number, number]> {
+  let area = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length];
+    area += x0 * y1 - x1 * y0;
+  }
+  const ccw = area > 0 ? 1 : -1;
+  const n = poly.length;
+  return poly.map((p, i) => {
+    const a = poly[(i - 1 + n) % n], b = poly[(i + 1) % n];
+    const e0 = [p[0] - a[0], p[1] - a[1]], e1 = [b[0] - p[0], b[1] - p[1]];
+    const l0 = Math.hypot(e0[0], e0[1]) || 1, l1 = Math.hypot(e1[0], e1[1]) || 1;
+    // Normal interior (a la izquierda en CCW).
+    const n0 = [(-e0[1] / l0) * ccw, (e0[0] / l0) * ccw], n1 = [(-e1[1] / l1) * ccw, (e1[0] / l1) * ccw];
+    const k = 1 + n0[0] * n1[0] + n0[1] * n1[1];
+    const s = k > 0.2 ? d / k : d / 0.2;
+    return [p[0] + (n0[0] + n1[0]) * s, p[1] + (n0[1] + n1[1]) * s] as [number, number];
+  });
+}
+
+/**
+ * Silueta LATERAL extruida a lo ancho (como kit.extrudeSide) pero con el
+ * contorno EXACTO: los chaflanes de las aristas de los costados se tallan
+ * hacia dentro (kit.extrudeSide con bevel engorda la silueta). `side` =
+ * [[y, z], …]; anchura total `width` centrada en x = 0 (o en `at`).
+ */
+export function extrudeSideExact(
+  kit: ModelKit, side: Array<[number, number]>, width: number, mat: THREE.Material,
+  opts: PlaceOpts & { chamfer?: number } = {},
+): THREE.Mesh {
+  const c = Math.min(opts.chamfer ?? 0, width / 2 - 1e-3);
+  const ring = (x: number, poly: Array<[number, number]>): Ring => poly.map(([y, z]) => [x, y, z]);
+  const h = width / 2;
+  const rings: Ring[] = c > 0
+    ? (() => {
+      const inner = insetPolygon(side, c);
+      return [ring(-h, inner), ring(-h + c, side), ring(h - c, side), ring(h, inner)];
+    })()
+    : [ring(-h, side), ring(h, side)];
+  return loft(kit, rings, mat, opts);
+}
+
+/**
  * Prisma de sección constante en el plano XZ (perfil frontal) extruido a lo
  * largo de Y entre y0 e y1. `xz` = [[x, z], …].
  */

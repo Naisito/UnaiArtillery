@@ -23,7 +23,7 @@ import * as THREE from 'three';
 import { PAINT } from '../kit';
 import type { PlatformBuilder, RigAnimState } from '../rig';
 import { buildRunningGear } from '../parts/tracks';
-import { bakeStatic, chamferRect, keep, latheCrisp, loft, rod } from '../parts/tracked-geo';
+import { bakeStatic, chamferRect, extrudeSideExact, keep, latheCrisp, loft, rod } from '../parts/tracked-geo';
 import * as D from '../parts/tracked-details';
 
 // --- Cotas (m), origen = eje del montaje del cañón ---------------------------
@@ -62,17 +62,17 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
   traverse.add(hull);
   // Casco inferior: vientre, glacis, cabina (encima), cubierta motor, pozo
   // del cañón (más bajo, para que la culata baje a gran elevación).
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [-3.05, HULL.belly], [6.6, HULL.belly], [HULL.front, 1.05], [HULL.front, HULL.fenderZ],
     [HULL.cabY0, HULL.fenderZ], [HULL.cabY0, HULL.deckEngine], [HULL.engineY0, HULL.deckEngine],
     [HULL.engineY0, HULL.wellZ], [HULL.rear, HULL.wellZ], [HULL.rear, 0.75],
-  ], HULL.halfLower * 2, paint, { bevel: 0.025 }));
+  ], HULL.halfLower * 2, paint, { chamfer: 0.025 }));
   // Barcazas laterales (sobre las cadenas, por fuera del pozo).
   for (const s of [-1, 1]) {
-    hull.add(kit.extrudeSide([
+    hull.add(extrudeSideExact(kit, [
       [HULL.rear, HULL.fenderZ], [HULL.cabY0, HULL.fenderZ], [HULL.cabY0, HULL.deckEngine],
       [HULL.engineY0, HULL.deckEngine], [HULL.engineY0 - 0.15, HULL.deckGun], [HULL.rear, HULL.deckGun],
-    ], HULL.halfUpper - HULL.halfLower + 0.02, paint, { at: [s * (HULL.halfLower + HULL.halfUpper) / 2, 0, 0], bevel: 0.015 }));
+    ], HULL.halfUpper - HULL.halfLower + 0.02, paint, { at: [s * (HULL.halfLower + HULL.halfUpper) / 2, 0, 0], chamfer: 0.015 }));
     // Paredes del pozo.
     hull.add(kit.box(0.16, HULL.engineY0 - HULL.rear, HULL.deckGun - HULL.wellZ, paint, {
       at: [s * (HULL.wellHalf + 0.08), (HULL.engineY0 + HULL.rear) / 2, (HULL.deckGun + HULL.wellZ) / 2],
@@ -120,9 +120,9 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
   const cab0 = HULL.cabY0, cabF = HULL.front, roof = HULL.cabRoof;
   const slopeTop: [number, number] = [6.85, roof];
   const slopeBot: [number, number] = [cabF, 1.42];
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [cab0, HULL.fenderZ], [cabF, HULL.fenderZ], slopeBot, slopeTop, [cab0, roof],
-  ], 3.3, paint, { bevel: 0.04 }));
+  ], 3.3, paint, { chamfer: 0.04 }));
   {
     const a = new THREE.Vector2(slopeTop[0] - slopeBot[0], slopeTop[1] - slopeBot[1]);
     const ang = Math.atan2(a.y, a.x);
@@ -150,6 +150,7 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
   for (const s of [-1, 1]) {
     const x = s * 1.66;
     hull.add(kit.box(0.025, 0.8, 0.75, paintSoft, { at: [x, 5.45, 1.75], bevel: 0.01 }));
+    D.seamRect(kit, hull, [x + s * 0.0125, 5.45, 1.75], 0.78, 0.73, 'x', s as 1 | -1);
     hull.add(kit.box(0.02, 0.36, 0.22, kit.glass(), { at: [x + s * 0.008, 5.5, 1.92] }));
     for (const z of [1.5, 1.98]) hull.add(kit.cyl(0.026, 0.026, 0.14, paint, { axis: 'z', at: [x + s * 0.02, 5.08, z], segments: 10 }));
     D.grabHandle(kit, hull, [x, 5.9, 1.6], [x, 5.9, 2.0], [s, 0, 0], steel, 0.05, 0.011);
@@ -196,11 +197,11 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
   // ---------------------------------------------------------------------------
   //  Popa: reja hidráulica BAJADA, cilindros, plataforma de carga, pilotos.
   // ---------------------------------------------------------------------------
-  hull.add(kit.extrudeSide([
+  hull.add(extrudeSideExact(kit, [
     [-3.32, 1.0], [-3.46, 1.0], [-3.9, 0.35], [-4.14, -0.1], [-3.97, -0.1], [-3.72, 0.3], [-3.32, 0.82],
-  ], 2.9, paint, { bevel: 0.015 }));
+  ], 2.9, paint, { chamfer: 0.015 }));
   for (const x of [-1.1, -0.38, 0.38, 1.1]) {
-    hull.add(kit.extrudeSide([[-3.38, 0.95], [-3.82, 0.35], [-3.72, 0.32], [-3.36, 0.82]], 0.04, paint, { at: [x, 0, 0] }));
+    hull.add(extrudeSideExact(kit, [[-3.38, 0.95], [-3.82, 0.35], [-3.72, 0.32], [-3.36, 0.82]], 0.04, paint, { at: [x, 0, 0] }));
   }
   hull.add(kit.cyl(0.07, 0.07, 2.7, steel, { axis: 'x', at: [0, -3.36, 0.93], segments: 14 }));
   for (const s of [-1, 1]) {
@@ -238,9 +239,9 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
   for (const s of [-1, 1]) {
     const x = s * 0.65;
     // Flancos del afuste superior.
-    mount.add(kit.extrudeSide([
+    mount.add(extrudeSideExact(kit, [
       [-1.2, HULL.wellZ], [0.9, HULL.wellZ], [0.9, 1.45], [0.25, 2.55], [-0.1, 2.8], [-0.62, 2.8], [-0.95, 2.5], [-1.2, 1.8],
-    ], 0.12, paint, { at: [x, 0, 0], bevel: 0.02 }));
+    ], 0.12, paint, { at: [x, 0, 0], chamfer: 0.02 }));
     // Cubo del muñón y cojinete.
     const boss: Array<[number, number]> = [[0, -0.1], [0.23, -0.1], [0.23, 0.1], [0.16, 0.14], [0, 0.14]];
     mount.add(latheCrisp(kit, s > 0 ? boss : boss.map(([r, a]) => [r, -a] as [number, number]).reverse(), paint, {
