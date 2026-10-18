@@ -218,12 +218,21 @@ function linkTemplate(spec: RunningGearSpec): LinkTemplate {
   };
   // Zapata: cuerpo central.
   box(W * 0.92, P * 0.72, T, 0, 0, T / 2, steel);
-  // Alojamientos de bulón (doble bulón) en ambos extremos del eslabón.
-  pin(-P * 0.34, T * 0.52, W * 0.9);
-  pin(P * 0.34, T * 0.52, W * 0.9);
-  // Conectores laterales (unen los bulones de eslabones contiguos).
-  for (const s of [-1, 1]) {
-    box(0.034, P * 0.42, T * 1.15, s * (W / 2 - 0.006), P * 0.5, T * 0.55, steel);
+  // Alojamientos de bulón en ambos extremos del eslabón (doble bulón en la
+  // Bradley; ojales alternos del bulón único en la soviética).
+  if (spec.style === 'bradley') {
+    pin(-P * 0.34, T * 0.52, W * 0.9);
+    pin(P * 0.34, T * 0.52, W * 0.9);
+  } else {
+    pin(-P * 0.38, T * 0.55, W * 0.96);
+    pin(P * 0.38, T * 0.55, W * 0.96);
+  }
+  // Conectores laterales (unen los bulones de eslabones contiguos). La
+  // cadena soviética de bulón único con casquillos de goma no los lleva.
+  if (spec.style === 'bradley') {
+    for (const s of [-1, 1]) {
+      box(0.034, P * 0.42, T * 1.15, s * (W / 2 - 0.006), P * 0.5, T * 0.55, steel);
+    }
   }
   // Guía central (hacia dentro: pasa entre los discos de las ruedas).
   const gh = spec.style === 'soviet' ? 0.085 : 0.075;
