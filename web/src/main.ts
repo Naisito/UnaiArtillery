@@ -60,6 +60,11 @@ import { WEAPON_INFO } from './ui/weaponInfo';
 import { Vec3 } from './ballistics';
 import type { FlightResult, WeaponId } from './ballistics';
 import type { RangeRing } from './BallisticsService';
+// === V2:MAP === mapa: lectura, menú contextual, APP-6, abanico, medición, capas, rejilla
+import { MapInteraction } from './map/MapInteraction';
+import { subjectSizeForCategory } from './map/cameraMath';
+import type { FiringTable } from './ballistics';
+// === fin V2:MAP ===
 
 const splash = new Splash();
 
@@ -111,6 +116,8 @@ async function boot(): Promise<void> {
   splash.step('scene');
   const hud = new HUD();
 
+  // === V2:MAP === el picking del globo lo lleva MapInteraction (contrato PLAN §3.4)
+  let mapUi: MapInteraction | null = null;
   let piece: ArtilleryPiece;
   let gun: GunModel;
   /** Barra superior: se crea cuando ya existen pieza y meteo (lee de ellas). */
@@ -178,6 +185,7 @@ async function boot(): Promise<void> {
     },
     onClearCraters: () => {
       craters.clear();
+      mapUi?.clearImpacts(); // V2:MAP
       toast('Cráteres limpiados', { level: 'success' });
     },
     onPickMode: (mode) => setPickMode(mode),
@@ -422,6 +430,7 @@ async function boot(): Promise<void> {
     challenge.notifyImpact(enu);
     fo.notifyImpact(enu); // P-VIVO.6 — cuenta rondas y puntúa el reto FO
     gunnerHud.addImpact(enu); // punto en el minimapa del artillero
+    mapUi?.notifyImpact(enu); // V2:MAP — estallido APP-6 + corrección de observador
     tutorial?.notify('impact'); // P-VIVO.11 — paso 3: FUEGO e impacto
   };
 
@@ -470,63 +479,67 @@ async function boot(): Promise<void> {
   const cameraSwitcher = new CameraSwitcher(setCameraMode, { get: fovGet, set: fovSet });
 
   // ---------------------------------------------------------------------------
-  //  Selección en el globo — encapsulada tras setPickMode(mode): cuando el
-  //  agente MAP integre src/map/MapInteraction, esta función delega en
-  //  mapInteraction.setPickMode() y el manejador de clic desaparece.
+  //  Selección en el globo — la lleva MapInteraction; aquí solo se refleja el
+  //  modo en la UI (botones, estado de misión) en ambos sentidos.
   // ---------------------------------------------------------------------------
   let pickMode: PickMode = 'none';
+  function reflectPickMode(mode: PickMode): void {
+    pickMode = mode;
+    panel.reflectPickMode(mode);
+    missionStatus.setAiming(mode !== 'none');
+    document.body.classList.toggle('is-picking', mode !== 'none');
+  }
   function setPickMode(mode: PickMode): void {
     if (mode === 'target' && !panel.pickAllowed) {
       toast('Designación bloqueada durante el reto: apunta a mano', { level: 'warn' });
       mode = 'none';
     }
-    if (mode === pickMode) {
-      panel.reflectPickMode(mode);
-      return;
-    }
-    pickMode = mode;
-    panel.reflectPickMode(mode);
-    missionStatus.setAiming(mode !== 'none');
-    viewer.scene.canvas.style.cursor = mode === 'none' ? '' : 'crosshair';
-    document.body.classList.toggle('is-picking', mode !== 'none');
+    reflectPickMode(mode);
+    mapUi?.setPickMode(mode);
   }
 
-  const pickEcef = (windowPos: Cesium.Cartesian2): Cesium.Cartesian3 | undefined => {
-    const scene = viewer.scene;
-    if (scene.pickPositionSupported) {
-      const p = scene.pickPosition(windowPos);
-      if (Cesium.defined(p)) return p;
-    }
-    const ray = viewer.camera.getPickRay(windowPos);
-    return ray ? scene.globe.pick(ray, scene) : undefined;
-  };
-
-  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  handler.setInputAction((ev: Cesium.ScreenSpaceEventHandler.PositionedEvent) => {
-    if (pickMode === 'none') return;
-    const ecef = pickEcef(ev.position);
-    if (!ecef) {
-      toast('Ahí no hay terreno que designar', { level: 'warn' });
-      return;
-    }
-    if (pickMode === 'target') {
-      setPickMode('none');
-      void piece.aimAt(service.frame.ecefToEnu(ecef));
-      tutorial?.notify('target-marked'); // P-VIVO.11 — paso 4
-    } else if (pickMode === 'battery') {
-      setPickMode('none');
-      const carto = Cesium.Cartographic.fromCartesian(ecef);
-      void (async () => {
-        await reanchorBattery(
-          Cesium.Math.toDegrees(carto.longitude),
-          Cesium.Math.toDegrees(carto.latitude),
-        );
-        weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
-        flyToBattery(true);
-        toast(`Batería desplegada en ${fmtAngle(Cesium.Math.toDegrees(carto.latitude), 'deg', 3)} N`, { level: 'success' });
-      })();
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  // === V2:MAP === Interacción con el mapa (sustituye al manejador de picking):
+  // lectura bajo el cursor, menú contextual, APP-6, abanico, medición/LOS,
+  // capas base, rejilla MGRS, brújula/zoom y atajos T/B/M/G/L/N/Inicio/1–6/Esc.
+  director.subjectSizeProvider = () => subjectSizeForCategory(panel.weapon().category);
+  director.onModeChanged = (mode) => cameraSwitcher.mark(mode === 'op' ? 'free' : mode);
+  mapUi = new MapInteraction({
+    viewer,
+    service,
+    weapon: () => panel.weapon(),
+    weaponId: () => panel.weaponId,
+    chargeIndex: () => panel.chargeIndex,
+    aim: () => ({ azimuthDeg: panel.azimuthDeg, elevationDeg: panel.elevationDeg }),
+    target: () => piece.targetEnu,
+    pickLocked: () => challenge.active || fo.active,
+    director,
+    preview,
+    observer: () => (fo.active ? director.lastOpPositionEnu : null),
+    // TODO(integración): la UI debería exponer la tabla vigente con un getter público.
+    firingTable: () => (firingTable as unknown as { table: FiringTable | null }).table ?? null,
+    actions: {
+      setTarget: (enu) => {
+        void piece.aimAt(enu);
+        tutorial?.notify('target-marked'); // P-VIVO.11 — paso 4
+      },
+      moveBattery: (lonDeg, latDeg) => {
+        void (async () => {
+          await reanchorBattery(lonDeg, latDeg);
+          weather.onBatteryMoved(); // P-PRO.2 — re-consulta si la meteo real manda
+          flyToBattery(true);
+          toast(`Batería desplegada en ${fmtAngle(latDeg, 'deg', 3)} N`, { level: 'success' });
+        })();
+      },
+      flyToBattery: () => flyToBattery(true),
+      flyToTarget: () => {
+        if (piece.targetEnu) void director.frameTarget(piece.targetEnu);
+      },
+      setCameraMode: (mode) => setCameraMode(mode),
+    },
+  });
+  mapUi.onPickModeChanged = (mode) => reflectPickMode(mode);
+  (window as unknown as Record<string, unknown>).__uaMap = mapUi;
+  // === fin V2:MAP ===
 
   // ---------------------------------------------------------------------------
   //  P-VIVO.10 — compartir por URL (#s=…) + sesión persistida.
@@ -658,23 +671,9 @@ async function boot(): Promise<void> {
   // V2: girado con el azimut de tiro para que el arco cruce siempre el
   // encuadre en diagonal, sea cual sea la dirección de tiro.
   function flyToBattery(fast: boolean): void {
-    const f = service.frame;
-    const th = ((panel.azimuthDeg - 90) * Math.PI) / 180;
-    const c = Math.cos(th);
-    const sn = Math.sin(th);
-    const rot = (x: number, y: number, z: number) => new Vec3(x * c + y * sn, -x * sn + y * c, z);
-    viewer.camera.flyTo({
-      destination: f.enuToEcef(rot(-900, -900, 500)),
-      orientation: {
-        direction: Cesium.Cartesian3.normalize(
-          f.enuVectorToEcef(rot(0.62, 0.62, -0.28)), new Cesium.Cartesian3(),
-        ),
-        up: Cesium.Cartesian3.normalize(
-          f.enuVectorToEcef(rot(0.2, 0.2, 0.96)), new Cesium.Cartesian3(),
-        ),
-      },
-      duration: fast ? 1.2 : 2.8,
-    });
+    // === V2:MAP === encuadre de batería: arma en primer plano, mirando aguas abajo
+    void director.frameBattery(fast);
+    // === fin V2:MAP ===
   }
   flyToBattery(false);
 
@@ -745,7 +744,7 @@ async function boot(): Promise<void> {
       if (m) setCameraMode(m);
     },
     fpsLocked: () => director.mode === 'fps' && document.pointerLockElement === viewer.scene.canvas,
-  }, { mapKeys: true });
+  }, { mapKeys: false }); // V2:MAP — T/B/M/G/L/N/Inicio/1–6 los gestiona MapInteraction
 
   // P-PRO.8 — overlay de depuración de rendimiento (?stats=1).
   // === V2:VFX — fps/frame-time, draw calls reales de Cesium y Three,
