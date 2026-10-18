@@ -1,95 +1,419 @@
 // ============================================================================
-//  GunModel.ts — Modelo 3D procedural del arma que apunta EN VIVO.  [P-PRO.1]
+//  GunModel.ts — El arma que apunta EN VIVO, pintada DENTRO de Cesium.
+//  [P-PRO.1 → V2 / 3D-CORE]
 //
-//  La batería deja de ser un punto invisible: geometría Three.js por
-//  categoría (mortero/obús/cohete/misil), cero assets binarios. El grupo vive
-//  en overlay.enuRoot en el origen ENU. Convención local: +y = adelante
-//  (norte con azimut 0), +z = arriba; el azimut gira la parte móvil sobre z
-//  (si traverseDeg < 360 gira el arma ENTERA: los morteros no tienen torreta)
-//  y el tubo se eleva en su pivote (rotación sobre x local).
+//  V2: el modelo sale del registro de plataformas (models/platforms: M777A2,
+//  M109A7, 2S7, M120, M270, HIMARS, armas ligeras) como rig Three articulado
+//  (contrato models/rig.ts) y el runtime (models/runtime) lo hornea a GLB y
+//  lo carga como Cesium.Model: luz solar real, sombras sobre el terreno y
+//  oclusión con el relieve. Mientras carga —o si Cesium falla, o con
+//  `?models=three`— se ve la copia horneada en el overlay Three (nunca hay
+//  hueco sin arma). Se suma el atrezo de batería (dotación, munición,
+//  cargas, red de camuflaje) en las piezas de tubo.
 //
-//  La boca REAL del tubo se expone con muzzleWorldEnu() (analítica, sin pasar
-//  por matrices de Three): de ahí nacen fogonazo, humo y cámara de cabina.
-//  Al disparar, fireRecoil() retrocede el tubo 0.3-0.5 m con retorno
-//  amortiguado ~0.4 s (solo visual, la física no se toca).
+//  API pública (la de siempre + extras):
+//    new GunModel(parent, weapon, opts?)   parent = overlay.enuRoot
+//    setWeapon(weapon, weaponId?)          (weaponId se infiere del nombre)
+//    update(dt, azDeg, elDeg)              puntería + retroceso + animación
+//    fireRecoil()                          culatazo (~60 ms) + recuperación
+//    muzzleWorldEnu()                      boca EXACTA (de las matrices del rig)
+//    setFrame(frame) · setPropsVisible(b) · muzzleHeightM(el?) · dispose()
 // ============================================================================
 import * as THREE from 'three';
-import { Vec3, Weapon } from './ballistics';
+import { Vec3, Weapon, WeaponCatalog } from './ballistics';
+import type { WeaponId } from './ballistics';
+import type { GeoFrame } from './frame';
+import { ModelKit } from './models/kit';
+import { PLATFORM_BUILDERS, PLATFORM_OF } from './models/platforms';
+import { placeholderRig } from './models/platforms/_placeholder';
+import { buildBatteryProps } from './models/props';
+import { DEG, type PlatformKey, type PlatformRig } from './models/rig';
+import { ArticulatedModel, type RenderPath } from './models/runtime/ArticulatedModel';
+import { frameProvider, groundSampler, type ModelRenderMode } from './models/runtime/context';
 
-const DEG = Math.PI / 180;
+/** Versión del contenido de los modelos (invalida la caché de GLB). */
+const MODEL_REV = 1;
+
+export interface GunModelOptions {
+  /** Arma (si no, se infiere de weapon.name). */
+  weaponId?: WeaponId;
+  /** Atrezo de batería visible (defecto true). */
+  props?: boolean;
+  /** 'three' fuerza el overlay; 'auto' usa Cesium si está configurado. */
+  mode?: ModelRenderMode;
+}
+
+/** Envolvente del culatazo y del cabeceo por familia de plataforma. */
+export interface RecoilProfile {
+  /** Carrera hacia atrás (s). */
+  strokeS: number;
+  /** Pausa en retroceso máximo (s). */
+  holdS: number;
+  /** Recuperación hidroneumática (s). */
+  returnS: number;
+  /** Cabeceo de la suspensión/afuste (grados, pico). */
+  rockDeg: number;
+  rockHz: number;
+  /** Hundimiento vertical (m, pico). */
+  squatM: number;
+}
+
+export const RECOIL_PROFILES: Record<'towed' | 'sp' | 'mortar' | 'launcher' | 'small', RecoilProfile> = {
+  towed: { strokeS: 0.06, holdS: 0.05, returnS: 0.85, rockDeg: 0.35, rockHz: 2.4, squatM: 0.03 },
+  sp: { strokeS: 0.06, holdS: 0.04, returnS: 0.7, rockDeg: 0.6, rockHz: 1.7, squatM: 0.04 },
+  mortar: { strokeS: 0.03, holdS: 0.0, returnS: 0.25, rockDeg: 0.25, rockHz: 4.0, squatM: 0.025 },
+  launcher: { strokeS: 0.05, holdS: 0.0, returnS: 0.3, rockDeg: 0.45, rockHz: 1.5, squatM: 0.03 },
+  small: { strokeS: 0.012, holdS: 0.0, returnS: 0.06, rockDeg: 0.0, rockHz: 0, squatM: 0 },
+};
+
+/**
+ * Envolvente del retroceso 0..1 a `t` s del disparo: carrera rápida
+ * (seno, ~60 ms), pausa breve y recuperación con frenado al final (coseno).
+ */
+export function recoilEnvelope(t: number, p: RecoilProfile): number {
+  if (!(t >= 0) || !Number.isFinite(t)) return 0;
+  if (t < p.strokeS) return Math.sin((t / p.strokeS) * (Math.PI / 2));
+  t -= p.strokeS;
+  if (t < p.holdS) return 1;
+  t -= p.holdS;
+  if (t < p.returnS) return 0.5 * (1 + Math.cos(Math.PI * (t / p.returnS)));
+  return 0;
+}
+
+/** Familia de retroceso de cada plataforma. */
+export function recoilFamily(key: PlatformKey): keyof typeof RECOIL_PROFILES {
+  switch (key) {
+    case 'm777': return 'towed';
+    case 'm109a7': case '2s7-pion': return 'sp';
+    case 'mortar-m120': return 'mortar';
+    case 'm270-mlrs': case 'm142-himars': return 'launcher';
+    default: return 'small';
+  }
+}
+
+/**
+ * Carrera máxima (m) de una masa de silueta `hull` (y, z en el espacio de
+ * recoil) con los muñones a `trunnionZ` sobre el suelo, a `elevationDeg`.
+ */
+export function strokeLimitFor(hull: Array<[number, number]>, trunnionZ: number, elevationDeg: number,
+  clearance = 0.06): number {
+  const el = elevationDeg * DEG;
+  const s = Math.sin(el), c = Math.cos(el);
+  if (s < 0.05 || hull.length === 0) return Number.POSITIVE_INFINITY;
+  let lim = Number.POSITIVE_INFINITY;
+  for (const [y, z] of hull) lim = Math.min(lim, (trunnionZ - clearance + y * s + z * c) / s);
+  return Math.max(0, lim);
+}
+
+/** Envolvente convexa (cadena monótona) de la silueta (y, z) de recoil. */
+function recoilHull(rig: PlatformRig): Array<[number, number]> {
+  const inv = new THREE.Matrix4().copy(rig.recoil.matrixWorld).invert();
+  const m = new THREE.Matrix4();
+  const v = new THREE.Vector3();
+  const pts: Array<[number, number]> = [];
+  rig.recoil.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    const pos = mesh.isMesh ? mesh.geometry?.attributes?.position : undefined;
+    if (!pos) return;
+    m.multiplyMatrices(inv, mesh.matrixWorld);
+    const step = Math.max(1, Math.floor(pos.count / 400));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      pts.push([v.y, v.z]);
+    }
+  });
+  if (pts.length < 3) return pts;
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lowerH: Array<[number, number]> = [];
+  for (const p of pts) {
+    while (lowerH.length >= 2 && cross(lowerH[lowerH.length - 2], lowerH[lowerH.length - 1], p) <= 0) lowerH.pop();
+    lowerH.push(p);
+  }
+  const upperH: Array<[number, number]> = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upperH.length >= 2 && cross(upperH[upperH.length - 2], upperH[upperH.length - 1], p) <= 0) upperH.pop();
+    upperH.push(p);
+  }
+  return lowerH.slice(0, -1).concat(upperH.slice(0, -1));
+}
+
+/** Plano z = a·x + b·y + c por mínimos cuadrados (ignora muestras null). */
+export function fitPlane(pts: Array<[number, number]>, zs: Array<number | null>): { a: number; b: number; c: number } | null {
+  let n = 0, sx = 0, sy = 0, sz = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0;
+  pts.forEach(([x, y], i) => {
+    const z = zs[i];
+    if (z === null || z === undefined || !Number.isFinite(z)) return;
+    n++; sx += x; sy += y; sz += z; sxx += x * x; syy += y * y; sxy += x * y; sxz += x * z; syz += y * z;
+  });
+  if (n < 3) return null;
+  // Sistema normal 3×3 (Cramer).
+  const m = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]];
+  const r = [sxz, syz, sz];
+  const det3 = (a: number[][]) =>
+    a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) -
+    a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+    a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+  const D = det3(m);
+  if (Math.abs(D) < 1e-9) return null;
+  const col = (k: number) => m.map((row, i) => row.map((v, j) => (j === k ? r[i] : v)));
+  return { a: det3(col(0)) / D, b: det3(col(1)) / D, c: det3(col(2)) / D };
+}
+
+let idByName: Map<string, WeaponId> | null = null;
+/** WeaponId de un Weapon por su nombre (los Weapon no llevan id). */
+export function weaponIdOf(weapon: Weapon): WeaponId {
+  if (!idByName) {
+    idByName = new Map();
+    for (const id of WeaponCatalog.ids()) idByName.set(WeaponCatalog.get(id).name, id);
+  }
+  const hit = idByName.get(weapon.name);
+  if (hit) return hit;
+  // Arma fuera de catálogo: la plataforma más parecida por categoría.
+  switch (weapon.category) {
+    case 'Mortar': return 'mortar120';
+    case 'Rocket': return 'gmlrs';
+    case 'Missile': return 'tacticalMissile';
+    case 'SmallArms': return weapon.round.diameter > 0.01 ? 'm2browning' : 'rifle556';
+    default: return 'm777';
+  }
+}
+
+interface Built {
+  key: PlatformKey;
+  weaponId: WeaponId;
+  kit: ModelKit;
+  rig: PlatformRig;
+  model: ArticulatedModel;
+  props: THREE.Object3D[];
+  profile: RecoilProfile;
+  rootPos: THREE.Vector3;
+  rootQuat: THREE.Quaternion;
+  /** Envolvente convexa (y, z) de la masa que retrocede (local de recoil). */
+  hull: Array<[number, number]>;
+  /** Altura del eje de muñones sobre el suelo (m, en reposo). */
+  trunnionZ: number;
+}
 
 export class GunModel {
-  /** Raíz del modelo (hijo de enuRoot, en el origen ENU de la batería). */
+  /** Contenedor en el overlay (copia Three del modelo). */
   readonly group = new THREE.Group();
 
-  /** Parte que gira en azimut (torreta, o el arma entera si no hay torreta). */
-  private turret = new THREE.Group();
-  /** Pivote de elevación (cuna); su rotation.x es la elevación. */
-  private cradle = new THREE.Group();
-  /** Malla(s) del tubo: retroceden juntas a lo largo de -y local. */
-  private recoiling = new THREE.Group();
-
-  // Geometría de puntería (para muzzleWorldEnu analítica).
-  private pivotY = 0;         // pivote de la cuna, adelante del eje de giro (m)
-  private pivotZ = 0;         // altura del pivote (m)
-  private muzzleY = 0;        // boca: distancia desde el pivote a lo largo del tubo
-
-  // Retroceso visual.
-  private recoilAmpM = 0.4;
-  private recoilAge = Number.POSITIVE_INFINITY;
-  private recoilNow = 0;
-
+  private built: Built | null = null;
   private azimuthDeg = 0;
   private elevationDeg = 0;
-  private disposables: { dispose(): void }[] = [];
+  private sinceFire = Number.POSITIVE_INFINITY;
+  private clock = 0;
+  private recoilNow = 0;
+  private propsOn: boolean;
+  private frameOverride: GeoFrame | null = null;
+  private recoilOverride: number | null = null;
+  /** Asiento en el terreno: inclinación del plano ajustado + desnivel. */
+  private readonly tilt = new THREE.Quaternion();
+  private readonly tiltInv = new THREE.Quaternion();
+  private groundOffset = 0;
+  private groundToken = 0;
+  private groundFrame: GeoFrame | null = null;
+  /** Puntería en el marco del rig (tras compensar la inclinación). */
+  private rigAzDeg = 0;
+  private rigElDeg = 0;
+  private readonly mode: ModelRenderMode;
 
-  constructor(private readonly parent: THREE.Object3D, weapon: Weapon) {
+  // Escratch (cero asignaciones por frame).
+  private readonly m4 = new THREE.Matrix4();
+  private readonly v3 = new THREE.Vector3();
+  private readonly axis = new THREE.Vector3();
+  private readonly dir = new THREE.Vector3();
+  private readonly qRock = new THREE.Quaternion();
+
+  constructor(private readonly parent: THREE.Object3D, weapon: Weapon, opts: GunModelOptions = {}) {
+    this.group.name = 'GunModel';
     parent.add(this.group);
-    this.build(weapon);
+    this.propsOn = opts.props ?? true;
+    this.mode = opts.mode ?? 'auto';
+    this.build(weapon, opts.weaponId ?? weaponIdOf(weapon));
   }
 
   /** Reconstruye el modelo al cambiar de arma (dispose limpio). */
-  setWeapon(weapon: Weapon): void {
+  setWeapon(weapon: Weapon, weaponId?: WeaponId): void {
+    const id = weaponId ?? weaponIdOf(weapon);
+    if (this.built && this.built.weaponId === id) return;
     this.clear();
-    this.build(weapon);
+    this.build(weapon, id);
   }
 
-  /** Puntería en vivo + retorno amortiguado del retroceso. */
+  /** Plataforma vigente. */
+  get platform(): PlatformKey { return this.built?.key ?? 'm777'; }
+
+  /** Camino de render vigente ('cesium' cuando ya pinta Cesium). */
+  get renderPath(): RenderPath { return this.built?.model.path ?? 'three'; }
+
+  /** Promesa del modelo vigente listo (camino final). */
+  get ready(): Promise<RenderPath> { return this.built?.model.ready ?? Promise.resolve('three'); }
+
+  /** Rig vigente (Model Lab / depuración). */
+  get rig(): PlatformRig | null { return this.built?.rig ?? null; }
+
+  /** Modelo articulado vigente (horneado + vista Cesium/Three). */
+  get articulated(): ArticulatedModel | null { return this.built?.model ?? null; }
+
+  /** Fija la envolvente de retroceso 0..1 (Model Lab); null = la del disparo. */
+  previewRecoil(r01: number | null): void {
+    this.recoilOverride = r01 === null ? null : Math.max(0, Math.min(1, r01));
+  }
+
+  /** Puntería en vivo + retroceso + animación secundaria + sincronía. */
   update(dt: number, azimuthDeg: number, elevationDeg: number): void {
+    const b = this.built;
+    if (!b) return;
     this.azimuthDeg = azimuthDeg;
     this.elevationDeg = elevationDeg;
+    this.clock += dt;
+    this.sinceFire += dt;
 
-    // Retroceso: culatazo casi instantáneo (60 ms) y retorno exponencial
-    // (~0.4 s hasta asentarse), como el freno hidroneumático real.
-    this.recoilAge += dt;
-    const t0 = 0.06, tau = 0.12;
-    const a = this.recoilAge;
-    this.recoilNow =
-      a < t0 ? this.recoilAmpM * (a / t0)
-      : a < t0 + 5 * tau ? this.recoilAmpM * Math.exp(-(a - t0) / tau)
-      : 0;
-    this.recoiling.position.y = -this.recoilNow;
+    this.watchGround();
 
-    // La energía que el freno no absorbe la come la suspensión: el arma se
-    // encoge unos cm y cabecea medio grado mientras dura el culatazo.
-    const env = this.recoilAmpM > 0 ? this.recoilNow / this.recoilAmpM : 0;
-    this.turret.rotation.z = -azimuthDeg * DEG;
-    this.cradle.rotation.x = elevationDeg * DEG - 0.6 * DEG * env;
-    this.group.position.z = -0.05 * env;
+    // Puntería ordenada (ENU real) → ángulos en el marco del rig inclinado:
+    // como el apuntador real, que nivela y compensa el desnivel del afuste,
+    // el tubo queda EXACTAMENTE en la dirección ordenada.
+    const az = azimuthDeg * DEG, el = elevationDeg * DEG;
+    const d = this.dir.set(Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), Math.sin(el))
+      .applyQuaternion(this.tiltInv);
+    this.rigAzDeg = Math.atan2(d.x, d.y) / DEG;
+    this.rigElDeg = Math.asin(Math.max(-1, Math.min(1, d.z))) / DEG;
+
+    const env = this.recoilOverride ?? recoilEnvelope(this.sinceFire, b.profile);
+    this.recoilNow = env * Math.min(b.rig.recoilStrokeM, this.strokeLimit(b, this.rigElDeg));
+
+    const { rig } = b;
+    rig.traverse.rotation.z = -this.rigAzDeg * DEG;
+    rig.elevation.rotation.x = this.rigElDeg * DEG;
+    rig.recoil.position.y = -this.recoilNow;
+
+    // Lo que el freno no absorbe lo come el afuste/suspensión: hundimiento
+    // y cabeceo amortiguado alrededor del eje transversal al tiro.
+    const t = this.sinceFire;
+    const p = b.profile;
+    let rock = 0, squat = 0;
+    if (t < 3 && p.rockDeg > 0) {
+      rock = p.rockDeg * DEG * Math.exp(-t / 0.35) * Math.sin(2 * Math.PI * p.rockHz * t);
+      squat = -p.squatM * (t < 0.05 ? t / 0.05 : Math.exp(-(t - 0.05) / 0.25));
+    }
+    rig.root.position.set(b.rootPos.x, b.rootPos.y, b.rootPos.z + squat + this.groundOffset);
+    rig.root.quaternion.copy(this.tilt).multiply(b.rootQuat);
+    if (rock !== 0) {
+      this.axis.set(Math.cos(az), -Math.sin(az), 0);
+      rig.root.quaternion.premultiply(this.qRock.setFromAxisAngle(this.axis, rock));
+    }
+
+    rig.animate?.({
+      t: this.clock, dt, azimuthDeg: this.rigAzDeg, elevationDeg: this.rigElDeg,
+      recoil01: env, sinceFireS: this.sinceFire,
+    });
+    b.model.sync();
   }
 
   /** Dispara el retroceso visual del tubo. */
-  fireRecoil(): void { this.recoilAge = 0; }
+  fireRecoil(): void { this.sinceFire = 0; }
 
-  /** Punta del tubo en coordenadas ENU (analítica: az/el actuales + retroceso). */
+  /**
+   * Punta del tubo en coordenadas ENU, EXACTA respecto al tubo pintado: se
+   * compone la cadena de matrices del rig (puntería, retroceso, cabeceo).
+   */
   muzzleWorldEnu(): Vec3 {
-    const az = this.azimuthDeg * DEG;
-    const el = this.elevationDeg * DEG;
-    const sinAz = Math.sin(az), cosAz = Math.cos(az);
-    const dir = new Vec3(sinAz * Math.cos(el), cosAz * Math.cos(el), Math.sin(el));
-    const pivot = new Vec3(this.pivotY * sinAz, this.pivotY * cosAz, this.pivotZ);
-    return pivot.add(dir.mul(this.muzzleY - this.recoilNow));
+    const b = this.built;
+    if (!b) return new Vec3(0, 0, 3);
+    this.worldOf(b.rig.recoil, this.m4);
+    const v = this.v3.copy(b.rig.muzzleLocal).applyMatrix4(this.m4);
+    return new Vec3(v.x, v.y, v.z);
   }
+
+  /**
+   * Altura de la boca sobre el suelo (m) en reposo para una elevación —
+   * para lanzar el proyectil físico desde la boca real:
+   * `service.muzzleHeightM = gun.muzzleHeightM(panel.elevationDeg)`.
+   */
+  muzzleHeightM(elevationDeg = this.elevationDeg): number {
+    const b = this.built;
+    if (!b) return 3;
+    const pivot = this.v3;
+    this.worldOf(b.rig.elevation, this.m4);
+    pivot.setFromMatrixPosition(this.m4);
+    const ml = b.rig.muzzleLocal;
+    const el = elevationDeg * DEG;
+    const elevZ = pivot.z;
+    return elevZ + ml.y * Math.sin(el) + ml.z * Math.cos(el);
+  }
+
+  /** Fija el marco ENU explícitamente (si no, el del runtime/servicio). */
+  setFrame(frame: GeoFrame): void {
+    this.frameOverride = frame;
+  }
+
+  /** Inclinación actual del asiento en el terreno (grados, 0 = llano). */
+  get groundTiltDeg(): number {
+    return (2 * Math.acos(Math.min(1, Math.abs(this.tilt.w)))) / DEG;
+  }
+
+  /** Re-asienta si el marco ENU cambió (re-anclaje, edificios 3D…). */
+  private watchGround(): void {
+    const f = this.frameOverride ?? frameProvider()?.() ?? null;
+    if (f !== this.groundFrame) {
+      this.groundFrame = f;
+      void this.fitGround();
+    }
+  }
+
+  /**
+   * Asienta el arma en el relieve: muestrea el suelo visual en un anillo de
+   * la huella, ajusta un plano por mínimos cuadrados (z = a·x + b·y + c) e
+   * inclina el rig sobre él (tope 15°); c corrige el desnivel entre el suelo
+   * de la física y el visual (teselas 3D).
+   */
+  async fitGround(): Promise<void> {
+    const sample = groundSampler();
+    const b = this.built;
+    if (!sample || !b) return;
+    const token = ++this.groundToken;
+    const R = Math.max(2, Math.min(5, b.rig.footprintM * 0.6));
+    const pts: Array<[number, number]> = [[0, 0]];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      pts.push([Math.sin(a) * R, Math.cos(a) * R]);
+    }
+    let zs: Array<number | null>;
+    try {
+      zs = await Promise.all(pts.map(([x, y]) => sample(x, y)));
+    } catch {
+      return;
+    }
+    if (token !== this.groundToken) return;
+    const fit = fitPlane(pts, zs);
+    if (!fit) return;
+    const n = new THREE.Vector3(-fit.a, -fit.b, 1).normalize();
+    const maxTilt = 15 * DEG;
+    const ang = Math.acos(n.z);
+    if (ang > maxTilt) {
+      const h = Math.hypot(n.x, n.y);
+      n.set((n.x / h) * Math.sin(maxTilt), (n.y / h) * Math.sin(maxTilt), Math.cos(maxTilt));
+    }
+    this.tilt.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    this.tiltInv.copy(this.tilt).invert();
+    this.groundOffset = Math.max(-3, Math.min(3, fit.c));
+    this.update(0, this.azimuthDeg, this.elevationDeg);
+  }
+
+  /** Atrezo de batería (dotación, munición, red) visible u oculto. */
+  setPropsVisible(v: boolean): void {
+    this.propsOn = v;
+    const b = this.built;
+    if (!b) return;
+    for (const p of b.props) b.model.setNodeVisible(p, v);
+  }
+
+  get propsVisible(): boolean { return this.propsOn; }
 
   dispose(): void {
     this.clear();
@@ -97,335 +421,81 @@ export class GunModel {
   }
 
   // -------------------------------------------------------------------------
-  //  Construcción por categoría.
-  // -------------------------------------------------------------------------
+
   private clear(): void {
-    this.group.clear();
-    for (const d of this.disposables) d.dispose();
-    this.disposables = [];
+    if (!this.built) return;
+    this.built.model.dispose();
+    this.built.kit.dispose();
+    this.built = null;
   }
 
-  private build(weapon: Weapon): void {
-    this.turret = new THREE.Group();
-    this.cradle = new THREE.Group();
-    this.recoiling = new THREE.Group();
-    this.cradle.add(this.recoiling);
-    this.group.add(this.turret);
-
-    const d = weapon.round.diameter;
-    switch (weapon.category) {
-      case 'Mortar': this.buildMortar(d); break;
-      case 'Howitzer': this.buildHowitzer(d, weapon.traverseDeg >= 360); break;
-      case 'Rocket': this.buildRocket(d); break;
-      case 'Missile': this.buildMissile(d); break;
-      case 'SmallArms': this.buildSmallArm(d); break;
+  private build(weapon: Weapon, weaponId: WeaponId): void {
+    const key: PlatformKey = PLATFORM_OF[weaponId] ?? 'm777';
+    const kit = new ModelKit();
+    let rig: PlatformRig;
+    try {
+      rig = PLATFORM_BUILDERS[key]({ kit, weaponId, weapon });
+    } catch (err) {
+      // Un builder roto nunca deja la batería sin arma.
+      console.error(`[GunModel] builder de ${key} falló — uso el provisional`, err);
+      rig = placeholderRig({ kit, weaponId, weapon }, {
+        hullW: 2.4, hullL: 5, hullH: 0.8, pivotY: 0.3, pivotZ: 1.5, barrelL: 5, barrelR: 0.08,
+      });
     }
-    this.recoilAmpM =
-      weapon.category === 'SmallArms' ? 0.03
-      : weapon.category === 'Mortar' ? 0.12
-      : Math.min(0.5, Math.max(0.3, d * 2.2));
-    this.recoilAge = Number.POSITIVE_INFINITY;
+
+    // Silueta (y, z) de la masa que retrocede: límite de carrera con la QE.
+    rig.root.updateMatrixWorld(true);
+    const hull = recoilHull(rig);
+    const trunnionZ = new THREE.Vector3().setFromMatrixPosition(rig.elevation.matrixWorld).z;
+
+    let props: THREE.Object3D[] = [];
+    try {
+      props = buildBatteryProps({ kit, key, rig, weapon, weaponId });
+    } catch (err) {
+      console.warn('[GunModel] atrezo no disponible', err);
+    }
+
+    const animated: THREE.Object3D[] = [rig.traverse, rig.elevation, rig.recoil, ...(rig.extraAnimated ?? [])];
+    const model = new ArticulatedModel({
+      key: `gun:${key}:${weaponId}:r${MODEL_REV}:p${props.length}`,
+      root: rig.root,
+      animated,
+      keep: props,
+      threeParent: this.group,
+      mode: this.mode,
+      frame: () => this.frameOverride,
+    });
+
+    this.built = {
+      key, weaponId, kit, rig, model, props,
+      profile: RECOIL_PROFILES[recoilFamily(key)],
+      rootPos: rig.root.position.clone(),
+      rootQuat: rig.root.quaternion.clone(),
+      hull,
+      trunnionZ,
+    };
+    if (!this.propsOn) this.setPropsVisible(false);
+    this.sinceFire = Number.POSITIVE_INFINITY;
     this.update(0, this.azimuthDeg, this.elevationDeg);
   }
 
-  // -- Materiales/geometrías con registro para dispose ------------------------
-  private mat(color: number, metalness = 0.45, roughness = 0.55): THREE.MeshStandardMaterial {
-    const m = new THREE.MeshStandardMaterial({ color, metalness, roughness });
-    this.disposables.push(m);
-    return m;
+  /**
+   * Carrera máxima sin que la culata atraviese el suelo a esta elevación:
+   * para cada vértice (y, z) de la envolvente de la masa que retrocede,
+   * zMuñones + (y − s)·sin(el) + z·cos(el) ≥ holgura.
+   */
+  private strokeLimit(b: Built, elevationDeg: number): number {
+    return strokeLimitFor(b.hull, b.trunnionZ, elevationDeg);
   }
 
-  private mesh(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.Mesh {
-    this.disposables.push(geo);
-    return new THREE.Mesh(geo, mat);
-  }
-
-  private box(w: number, dpt: number, h: number, mat: THREE.Material): THREE.Mesh {
-    // (ancho x, fondo y, alto z)
-    return this.mesh(new THREE.BoxGeometry(w, dpt, h), mat);
-  }
-
-  /** Cilindro a lo largo de +y (CylinderGeometry ya es axial en y). */
-  private tubeMesh(rMuzzle: number, rBreech: number, len: number, mat: THREE.Material): THREE.Mesh {
-    return this.mesh(new THREE.CylinderGeometry(rMuzzle, rBreech, len, 20), mat);
-  }
-
-  /** Rueda con el eje en x (lateral). */
-  private wheel(r: number, width: number, mat: THREE.Material): THREE.Mesh {
-    const m = this.mesh(new THREE.CylinderGeometry(r, r, width, 18), mat);
-    m.rotation.z = Math.PI / 2;
-    return m;
-  }
-
-  /** Tubo + boca en la cuna; deja pivote/boca registrados para la puntería. */
-  private installBarrel(opts: {
-    pivotY: number; pivotZ: number; length: number;
-    rMuzzle: number; rBreech: number; backLen?: number;
-    mat: THREE.Material; muzzleBrake?: boolean; brakeMat?: THREE.Material;
-    /** Evacuador de ánima: bulto a ~60% del tubo (obuses de torreta). */
-    boreEvacuator?: boolean;
-    /** Bloque de culata visible que retrocede con el tubo. */
-    breechBlock?: boolean;
-  }): void {
-    const back = opts.backLen ?? opts.length * 0.12; // culata por detrás del pivote
-    const tube = this.tubeMesh(opts.rMuzzle, opts.rBreech, opts.length + back, opts.mat);
-    tube.position.y = (opts.length - back) / 2;
-    this.recoiling.add(tube);
-
-    if (opts.breechBlock) {
-      const block = this.box(opts.rBreech * 3.4, opts.rBreech * 2.6, opts.rBreech * 3.0, opts.mat);
-      block.position.y = -back;
-      this.recoiling.add(block);
+  /** Matriz "mundo" (ENU) de un nodo del rig: cadena de matrices locales. */
+  private worldOf(node: THREE.Object3D, out: THREE.Matrix4): THREE.Matrix4 {
+    node.updateMatrix();
+    out.copy(node.matrix);
+    for (let p = node.parent; p; p = p.parent) {
+      p.updateMatrix();
+      out.premultiply(p.matrix);
     }
-
-    if (opts.boreEvacuator) {
-      const ev = this.tubeMesh(opts.rMuzzle * 1.65, opts.rMuzzle * 1.65, opts.length * 0.14, opts.mat);
-      ev.position.y = opts.length * 0.62;
-      this.recoiling.add(ev);
-    }
-
-    if (opts.muzzleBrake) {
-      // Freno de boca: cilindro más ancho con dos deflectores (las "ranuras"
-      // se leen por el contraste de los bloques laterales oscuros).
-      const brakeMat = opts.brakeMat ?? opts.mat;
-      const brake = this.tubeMesh(opts.rMuzzle * 1.9, opts.rMuzzle * 1.9, opts.rMuzzle * 5.2, brakeMat);
-      brake.position.y = opts.length - opts.rMuzzle * 2.4;
-      const slot = this.box(opts.rMuzzle * 5.2, opts.rMuzzle * 3.4, opts.rMuzzle * 1.4, brakeMat);
-      slot.position.y = brake.position.y;
-      this.recoiling.add(brake, slot);
-    }
-
-    // Cuna con los cilindros del freno/recuperador bajo el tubo (no retroceden:
-    // son los que FRENAN al conjunto que sí retrocede).
-    for (const side of [-1, 1]) {
-      const recup = this.tubeMesh(opts.rMuzzle * 0.5, opts.rMuzzle * 0.5, opts.length * 0.3, opts.mat);
-      recup.position.set(side * opts.rBreech * 1.15, opts.length * 0.12, -opts.rBreech * 1.15);
-      this.cradle.add(recup);
-    }
-
-    this.cradle.position.set(0, opts.pivotY, opts.pivotZ);
-    this.turret.add(this.cradle);
-    this.pivotY = opts.pivotY;
-    this.pivotZ = opts.pivotZ;
-    this.muzzleY = opts.length;
-  }
-
-  /** Mortero: placa base circular + bípode + tubo corto muy empinado. */
-  private buildMortar(d: number): void {
-    const steel = this.mat(0x4a5240, 0.4, 0.6);      // verde oliva
-    const dark = this.mat(0x33383a, 0.55, 0.45);
-
-    const plate = this.mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.09, 24), dark);
-    plate.rotation.x = Math.PI / 2; // eje y -> z: placa tumbada en el suelo
-    plate.position.z = 0.05;
-    this.turret.add(plate);
-
-    // Bípode: dos patas delante del tubo.
-    for (const side of [-1, 1]) {
-      const leg = this.mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.15, 10), steel);
-      leg.position.set(side * 0.32, 0.55, 0.55);
-      leg.rotation.x = -35 * DEG;
-      leg.rotation.z = side * 14 * DEG;
-      this.turret.add(leg);
-    }
-
-    this.installBarrel({
-      pivotY: 0, pivotZ: 0.16,
-      length: d * 14.5,           // 120 mm -> ~1.75 m
-      rMuzzle: d * 0.62, rBreech: d * 0.72, backLen: 0.1,
-      mat: steel,
-    });
-  }
-
-  /** Arma ligera: trípode + cajón de mecanismos + cañón fino a escala real.
-   *  El modelo es pequeño de verdad (una M2 mide ~1.7 m): la Cabina queda
-   *  encima como un tirador de pie y las demás cámaras la ven diminuta —
-   *  correcto, es la escala del arma. */
-  private buildSmallArm(d: number): void {
-    const dark = this.mat(0x33383a, 0.55, 0.45);
-    const steel = this.mat(0x454b47, 0.6, 0.4);
-
-    // Trípode: tres patas hacia atrás/lados, rótula a ~1 m.
-    const hubZ = 1.0;
-    for (const [ang, lean] of [[0, 34], [130, 30], [-130, 30]] as const) {
-      const leg = this.mesh(new THREE.CylinderGeometry(0.02, 0.025, 1.25, 8), dark);
-      const a = ang * DEG;
-      leg.position.set(Math.sin(a) * 0.34, -Math.abs(Math.cos(a)) * 0.1 + Math.cos(a) * 0.34, hubZ / 2);
-      leg.rotation.x = Math.cos(a) * lean * DEG;
-      leg.rotation.y = 0;
-      leg.rotation.z = -Math.sin(a) * lean * DEG;
-      this.turret.add(leg);
-    }
-
-    // Cajón de mecanismos (receiver) sobre la rótula, solidario a la cuna.
-    const receiver = this.box(0.16, 0.62, 0.18, steel);
-    receiver.position.set(0, -0.1, 0);
-    this.cradle.add(receiver);
-    // Culata/gatillo esquemático atrás.
-    const grip = this.box(0.1, 0.16, 0.12, dark);
-    grip.position.set(0, -0.42, -0.05);
-    this.cradle.add(grip);
-
-    this.installBarrel({
-      pivotY: 0.15, pivotZ: hubZ,
-      length: Math.max(0.5, d * 85),   // 12.7 mm -> ~1.1 m de cañón
-      rMuzzle: Math.max(0.012, d * 0.9),
-      rBreech: Math.max(0.016, d * 1.2),
-      backLen: 0.05,
-      mat: steel,
-    });
-  }
-
-  /** Obús: chasis bajo con mazas/ruedas + cuna + tubo largo L39 con freno. */
-  private buildHowitzer(d: number, hasTurret: boolean): void {
-    const olive = this.mat(0x4a5240, 0.4, 0.6);
-    const gray = this.mat(0x565b58, 0.5, 0.5);
-    const dark = this.mat(0x2e3133, 0.5, 0.55);
-
-    // Chasis (autopropulsado si hay torreta; remolcado si no).
-    const hull = hasTurret ? this.group : this.turret; // torreta: el casco NO gira
-    const chassis = this.box(2.6, 4.6, 0.85, olive);
-    chassis.position.set(0, 0, 0.85);
-    hull.add(chassis);
-    for (const sx of [-1, 1]) {
-      for (const wy of hasTurret ? [-1.6, -0.55, 0.55, 1.6] : [0.25]) {
-        const w = this.wheel(0.52, 0.32, dark);
-        w.position.set(sx * 1.35, wy, 0.52);
-        hull.add(w);
-      }
-    }
-    if (!hasTurret) {
-      // Mazas del M777: dos patas traseras abiertas + plataforma de tiro
-      // central (el arma real dispara asentada sobre ella, no sobre las ruedas).
-      for (const side of [-1, 1]) {
-        const trail = this.box(0.22, 3.1, 0.22, gray);
-        trail.position.set(side * 0.75, -1.7, 0.5);
-        trail.rotation.z = side * -16 * DEG;
-        this.turret.add(trail);
-        const spade = this.box(0.34, 0.3, 0.5, dark); // reja clavada al suelo
-        spade.position.set(side * 1.15, -3.15, 0.25);
-        this.turret.add(spade);
-      }
-      const platform = this.mesh(new THREE.CylinderGeometry(0.7, 0.8, 0.18, 20), dark);
-      platform.rotation.x = Math.PI / 2;
-      platform.position.z = 0.1;
-      this.turret.add(platform);
-    } else {
-      // Torreta del M109: casco inclinado en dos alturas + escotilla.
-      const turretBox = this.box(2.3, 2.6, 0.95, olive);
-      turretBox.position.set(0, -0.3, 1.95);
-      const turretTop = this.box(1.7, 1.9, 0.5, olive);
-      turretTop.position.set(0, -0.45, 2.65);
-      const hatch = this.mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.14, 14), dark);
-      hatch.rotation.x = Math.PI / 2;
-      hatch.position.set(-0.55, -0.8, 2.95);
-      this.turret.add(turretBox, turretTop, hatch);
-    }
-
-    this.installBarrel({
-      pivotY: hasTurret ? 0.8 : 0.35,
-      pivotZ: hasTurret ? 2.15 : 1.25,
-      length: d * 39,             // L39: 155 mm -> ~6.05 m
-      rMuzzle: d * 0.58, rBreech: d * 0.95,
-      mat: gray, muzzleBrake: true, brakeMat: dark,
-      boreEvacuator: hasTurret, breechBlock: true,
-    });
-  }
-
-  /** Cohete: camión esquemático + caja lanzadora con 6 bocas visibles. */
-  private buildRocket(d: number): void {
-    const olive = this.mat(0x49523f, 0.35, 0.65);
-    const dark = this.mat(0x2e3133, 0.5, 0.55);
-    const cabMat = this.mat(0x3c4437, 0.35, 0.6);
-
-    const bed = this.box(2.5, 7.0, 0.7, olive);
-    bed.position.set(0, 0, 1.15);
-    this.group.add(bed);
-    const cab = this.box(2.3, 1.7, 1.5, cabMat);
-    cab.position.set(0, 2.9, 2.15);
-    this.group.add(cab);
-    for (const sx of [-1, 1]) {
-      for (const wy of [-2.6, -1.4, 1.6, 2.9]) {
-        const w = this.wheel(0.58, 0.4, dark);
-        w.position.set(sx * 1.3, wy, 0.58);
-        this.group.add(w);
-      }
-    }
-
-    // Gatos estabilizadores traseros: el camión no dispara sobre la suspensión.
-    for (const sx of [-1, 1]) {
-      const jack = this.mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.1, 10), dark);
-      jack.rotation.x = Math.PI / 2; // vertical
-      jack.position.set(sx * 1.15, -3.1, 0.55);
-      const foot = this.box(0.5, 0.5, 0.1, dark);
-      foot.position.set(sx * 1.15, -3.1, 0.05);
-      this.group.add(jack, foot);
-    }
-
-    // Caja lanzadora (pivote trasero) con 6 bocas en la cara delantera.
-    const podLen = Math.max(4.2, d * 18);
-    const pod = this.box(2.3, podLen, 1.7, olive);
-    pod.position.y = podLen / 2 - 0.8;
-    this.recoiling.add(pod);
-    for (let i = 0; i < 6; i++) {
-      const col = i % 3, row = Math.floor(i / 3);
-      const hole = this.mesh(new THREE.CylinderGeometry(d * 1.15, d * 1.15, 0.12, 16), dark);
-      hole.position.set((col - 1) * 0.72, podLen - 0.82, (row - 0.5) * 0.8);
-      this.recoiling.add(hole);
-    }
-    this.installBarrelless({ pivotY: -1.4, pivotZ: 1.95, muzzleY: podLen - 0.8 });
-  }
-
-  /** Misil: TEL con canister único grande que se eleva. */
-  private buildMissile(d: number): void {
-    const olive = this.mat(0x4d5346, 0.35, 0.65);
-    const dark = this.mat(0x2e3133, 0.5, 0.55);
-    const cabMat = this.mat(0x3c4437, 0.35, 0.6);
-
-    const bed = this.box(2.7, 8.2, 0.75, olive);
-    bed.position.set(0, 0, 1.2);
-    this.group.add(bed);
-    const cab = this.box(2.5, 1.8, 1.55, cabMat);
-    cab.position.set(0, 3.6, 2.25);
-    this.group.add(cab);
-    for (const sx of [-1, 1]) {
-      for (const wy of [-3.2, -1.9, -0.6, 2.1, 3.4]) {
-        const w = this.wheel(0.62, 0.42, dark);
-        w.position.set(sx * 1.42, wy, 0.62);
-        this.group.add(w);
-      }
-    }
-
-    for (const sx of [-1, 1]) {
-      const jack = this.mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.15, 10), dark);
-      jack.rotation.x = Math.PI / 2;
-      jack.position.set(sx * 1.25, -3.7, 0.57);
-      const foot = this.box(0.55, 0.55, 0.1, dark);
-      foot.position.set(sx * 1.25, -3.7, 0.05);
-      this.group.add(jack, foot);
-    }
-
-    const canLen = Math.max(6.5, d * 11);
-    const canister = this.mesh(
-      new THREE.CylinderGeometry(Math.max(0.55, d * 0.95), Math.max(0.55, d * 0.95), canLen, 18),
-      olive,
-    );
-    canister.position.y = canLen / 2 - 1.2;
-    this.recoiling.add(canister);
-    const lid = this.mesh(
-      new THREE.CylinderGeometry(Math.max(0.58, d), Math.max(0.58, d), 0.16, 18), dark,
-    );
-    lid.position.y = canLen - 1.2;
-    this.recoiling.add(lid);
-    this.installBarrelless({ pivotY: -2.2, pivotZ: 2.0, muzzleY: canLen - 1.2 });
-  }
-
-  /** Variante de installBarrel para lanzadores (la geometría ya está puesta). */
-  private installBarrelless(opts: { pivotY: number; pivotZ: number; muzzleY: number }): void {
-    this.cradle.position.set(0, opts.pivotY, opts.pivotZ);
-    this.turret.add(this.cradle);
-    this.pivotY = opts.pivotY;
-    this.pivotZ = opts.pivotZ;
-    this.muzzleY = opts.muzzleY;
+    return out;
   }
 }
