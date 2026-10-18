@@ -153,7 +153,7 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
     sprocket: { y: 3.42, z: 0.86, r: 0.33, teeth: 11 },
     idler: { y: -2.03, z: 0.56, r: 0.28 },
     roadWheels: { ys: [-1.38, -0.68, 0.02, 0.72, 1.42, 2.12, 2.82], r: 0.305 },
-    sag: 0.9, style: 'bradley', paint, hullHalfW: HULL.halfLower,
+    sag: 0.9, style: 'bradley', paint: kit.paint(PAINT.carcGreen, { wear: 0.6 }), hullHalfW: HULL.halfLower,
   });
   hull.add(gear.group);
 

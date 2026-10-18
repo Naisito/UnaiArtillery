@@ -178,7 +178,7 @@ export const buildM270: PlatformBuilder = (ctx) => {
     idler: { y: -0.2, z: 0.6, r: 0.28 },
     roadWheels: { ys: [0.55, 1.21, 2.25, 2.91, 3.96, 4.62], r: 0.305 },
     returnRollers: { ys: [0.75, 1.73, 3.43, 4.55], r: 0.11 },
-    sag: 0.03, style: 'bradley', paint, hullHalfW: HULL.halfLower,
+    sag: 0.03, style: 'bradley', paint: kit.paint(PAINT.carcGreen, { wear: 0.6 }), hullHalfW: HULL.halfLower,
   });
   hull.add(gear.group);
 

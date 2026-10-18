@@ -227,7 +227,7 @@ export const buildPion2S7: PlatformBuilder = (ctx) => {
     idler: { y: -2.85, z: 0.405, r: 0.335 },
     roadWheels: { ys: [5.45, 4.25, 3.05, 1.85, 0.65, -0.55, -1.75], r: 0.335 },
     returnRollers: { ys: [4.85, 3.65, 2.45, 1.25, 0.05, -1.15], r: 0.12, inner: true },
-    sag: 0.04, style: 'soviet', paint, hullHalfW: HULL.halfLower,
+    sag: 0.04, style: 'soviet', paint: kit.paint(PAINT.russianGreen, { wear: 0.6 }), hullHalfW: HULL.halfLower,
   });
   hull.add(gear.group);
 
