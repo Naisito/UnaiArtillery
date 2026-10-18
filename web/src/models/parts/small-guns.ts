@@ -16,8 +16,8 @@
 //    * M2HB: 1654 mm, cañón 45" (1143 mm).
 // ============================================================================
 import * as THREE from 'three';
-import { PAINT, type ModelKit } from '../kit';
-import { hexBolt, knob, picatinny, revolve, roundRect, sbox, sideShape, type Profile } from './small-util';
+import type { ModelKit } from '../kit';
+import { knob, picatinny, revolve, sbox, sideShape, type Profile } from './small-util';
 
 export interface GunBody {
   fixed: THREE.Group;
@@ -478,6 +478,119 @@ export function buildM240Body(kit: ModelKit, P: SmallPalette): MgBody {
   };
 }
 
-// Las demás armas (M2HB) se definen a continuación.
-export const _unusedPaint = PAINT;
-export const _unused = { hexBolt, roundRect, knob };
+// ============================================================================
+//  Ametralladora pesada M2HB / M2A1 (.50 BMG): cajón remachado con tapa del
+//  alimentador, soporte del cañón perforado, cañón pesado QCB con asa,
+//  apagallamas, alza de hoja, palanca de carga derecha, placa trasera con
+//  asideros de pala y disparador de mariposa.
+//  Coordenadas: y = 0 en la cara delantera del cajón, ánima z = 0.
+//  Asideros en y ≈ −0.585, boca en y ≈ +1.070 => 1655 mm. Cañón 1143 mm.
+// ============================================================================
+export function buildM2Body(kit: ModelKit, P: SmallPalette): MgBody & { feedLeft: THREE.Vector3 } {
+  const fixed = kit.group({ name: 'm2-fixed' });
+  const moving = kit.group({ name: 'm2-barrel' });
+  const S = P.parkGreen, D = P.park;
+  const HW = 0.070;              // semiancho del cajón
+  const ZB = -0.095, ZT = 0.055; // suelo / techo de las placas laterales
+  const RY = -0.445;             // cara trasera del cajón
+
+  // ---- Cajón ------------------------------------------------------------------
+  fixed.add(kit.extrudeSide([
+    [RY, ZB + 0.01], [RY, ZT], [-0.004, ZT], [0, ZT - 0.006], [0, ZB + 0.012], [-0.012, ZB], [RY + 0.012, ZB],
+  ], 2 * HW, S, { bevel: 0.003 }));
+  // Bloque del muñón (delante, abajo) y placa inferior.
+  fixed.add(sbox(kit, 2 * HW + 0.006, 0.075, 0.07, S, { at: [0, -0.042, ZB + 0.032], bevel: 0.004 }));
+  fixed.add(sbox(kit, 0.05, 0.05, 0.022, D, { at: [0, -0.06, ZB - 0.009], bevel: 0.003 }));
+  fixed.add(sbox(kit, 0.05, 0.05, 0.022, D, { at: [0, RY + 0.03, ZB - 0.009], bevel: 0.003 }));
+  // Remaches de las placas laterales.
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 9; i++) {
+      for (const z of [ZB + 0.012, ZT - 0.01]) {
+        fixed.add(kit.cyl(0.0042, 0.0036, 0.003, D, { axis: 'x', at: [s * (HW + 0.0012), RY + 0.025 + i * 0.049, z], segments: 8 }));
+      }
+    }
+    for (const [y, z] of [[-0.025, -0.02], [-0.06, -0.02], [-0.025, -0.06], [-0.06, -0.06], [-0.30, -0.035], [-0.36, -0.035]] as const) {
+      fixed.add(kit.cyl(0.0055, 0.0048, 0.0035, D, { axis: 'x', at: [s * (HW + 0.0015), y, z], segments: 10 }));
+    }
+  }
+  // Tapa del alimentador (abisagrada delante) con su pestillo.
+  fixed.add(kit.extrudeSide([
+    [-0.300, ZT], [-0.300, ZT + 0.022], [-0.290, ZT + 0.030], [-0.050, ZT + 0.030], [-0.030, ZT + 0.018], [-0.030, ZT],
+  ], 2 * HW - 0.01, S, { bevel: 0.003 }));
+  fixed.add(sbox(kit, 2 * HW - 0.03, 0.18, 0.004, D, { at: [0, -0.175, ZT + 0.031], bevel: 0.0015 }));
+  fixed.add(kit.cyl(0.008, 0.008, 2 * HW, D, { axis: 'x', at: [0, -0.04, ZT + 0.012], segments: 12 }));
+  fixed.add(sbox(kit, 0.03, 0.02, 0.02, D, { at: [0, -0.31, ZT + 0.016], bevel: 0.003 }));
+  // Ventana de alimentación (izquierda) con guía de cinta y retén.
+  fixed.add(sbox(kit, 0.004, 0.10, 0.04, P.hole, { at: [-(HW + 0.001), -0.165, 0.018] }));
+  fixed.add(sbox(kit, 0.03, 0.11, 0.008, D, { at: [-(HW + 0.014), -0.165, -0.006], bevel: 0.002 }));
+  fixed.add(sbox(kit, 0.03, 0.11, 0.006, D, { at: [-(HW + 0.014), -0.165, 0.042], bevel: 0.002 }));
+  fixed.add(sbox(kit, 0.004, 0.10, 0.04, P.hole, { at: [HW + 0.001, -0.165, 0.018] }));
+  // Palanca de carga (corredera de retroceso) a la derecha.
+  fixed.add(sbox(kit, 0.012, 0.30, 0.03, D, { at: [HW + 0.008, -0.20, -0.025], bevel: 0.003 }));
+  fixed.add(sbox(kit, 0.016, 0.03, 0.04, D, { at: [HW + 0.02, -0.33, -0.025], bevel: 0.004 }));
+  fixed.add(revolve(kit, [[0, 0.0], [0.009, 0.0], [0.011, 0.012], [0.011, 0.07], [0.013, 0.08], [0, 0.08]], P.blackPoly, { axis: 'x', at: [HW + 0.024, -0.33, -0.025], segments: 14 }));
+  // Alza de hoja (levantada) sobre el cajón, atrás.
+  fixed.add(sbox(kit, 0.05, 0.05, 0.012, D, { at: [0, -0.395, ZT + 0.006], bevel: 0.002 }));
+  for (const s of [-1, 1]) fixed.add(sbox(kit, 0.004, 0.012, 0.085, D, { at: [s * 0.012, -0.40, ZT + 0.05], rotDeg: [-8, 0, 0], bevel: 0.001 }));
+  fixed.add(sbox(kit, 0.03, 0.01, 0.012, D, { at: [0, -0.403, ZT + 0.06], rotDeg: [-8, 0, 0], bevel: 0.002 }));
+  fixed.add(sbox(kit, 0.028, 0.008, 0.006, D, { at: [0, -0.408, ZT + 0.094], rotDeg: [-8, 0, 0], bevel: 0.001 }));
+
+  // ---- Placa trasera, asideros de pala y disparador de mariposa ---------------
+  fixed.add(sbox(kit, 2 * HW + 0.004, 0.028, ZT - ZB + 0.004, S, { at: [0, RY - 0.014, (ZT + ZB) / 2], bevel: 0.005 }));
+  const grip = kit.polymer(0x2b2620);
+  for (const s of [-1, 1]) {
+    fixed.add(kit.extrudeSide([
+      [RY - 0.02, -0.005], [RY - 0.10, -0.005], [RY - 0.12, -0.02], [RY - 0.12, -0.075], [RY - 0.10, -0.09],
+      [RY - 0.02, -0.09], [RY - 0.02, -0.075], [RY - 0.095, -0.075], [RY - 0.105, -0.07], [RY - 0.105, -0.025],
+      [RY - 0.095, -0.02], [RY - 0.02, -0.02],
+    ], 0.016, S, { at: [s * 0.052, 0, 0], bevel: 0.002 }));
+    fixed.add(revolve(kit, [[0, -0.088], [0.012, -0.086], [0.0135, -0.075], [0.0135, -0.022], [0.012, -0.009], [0, -0.007]], grip, { axis: 'z', at: [s * 0.052, RY - 0.112, 0], segments: 16 }));
+  }
+  fixed.add(sbox(kit, 0.07, 0.012, 0.03, D, { at: [0, RY - 0.035, -0.045], bevel: 0.004 }));
+  fixed.add(sbox(kit, 0.012, 0.03, 0.012, D, { at: [0, RY - 0.04, ZT - 0.005], bevel: 0.002 }));
+
+  // ---- Soporte del cañón perforado (manguito delantero) ------------------------
+  fixed.add(revolve(kit, [
+    [0.0, -0.004], [0.050, -0.004], [0.050, 0.012], [0.045, 0.018], [0.045, 0.150], [0.036, 0.165], [0.026, 0.165], [0.026, 0.150],
+  ], S, { segments: 28 }));
+  for (const a of [90, 270, 30, 150, 210, 330]) {
+    for (const y of [0.045, 0.085, 0.125]) {
+      if ((a === 30 || a === 150 || a === 210 || a === 330) && y === 0.085) continue;
+      const hg = kit.group({ rotDeg: [0, a, 0], at: [0, y, 0] });
+      hg.add(kit.cyl(0.0125, 0.0125, 0.003, P.hole, { axis: 'z', at: [0, 0, 0.0445], segments: 16 }));
+      hg.add(kit.torus(0.0128, 0.0018, S, { axis: 'z', at: [0, 0, 0.0452], segments: 16 }));
+      fixed.add(hg);
+    }
+  }
+  // Mira delantera sobre el soporte.
+  fixed.add(kit.extrudeSide([[0.100, 0.040], [0.150, 0.040], [0.146, 0.058], [0.106, 0.058]], 0.03, D, { bevel: 0.002 }));
+  for (const s of [-1, 1]) fixed.add(kit.extrudeSide([[0.115, 0.055], [0.140, 0.055], [0.138, 0.084], [0.117, 0.084]], 0.004, D, { at: [s * 0.012, 0, 0], bevel: 0.001 }));
+  fixed.add(sbox(kit, 0.003, 0.012, 0.03, D, { at: [0, 0.128, 0.072] }));
+
+  // ---- Cañón pesado (retrocede), asa QCB y apagallamas ------------------------
+  moving.add(revolve(kit, [
+    [0.0, -0.12], [0.026, -0.12], [0.026, 0.150], [0.0235, 0.160], [0.0228, 0.30], [0.0215, 0.70],
+    [0.0205, 1.00], [0.0198, 1.012], [0, 1.012],
+  ], D, { segments: 24 }));
+  // Abrazadera del asa y asa de transporte (izquierda, inclinada).
+  moving.add(revolve(kit, [[0, 0.245], [0.029, 0.245], [0.031, 0.25], [0.031, 0.29], [0.029, 0.295], [0, 0.295]], S, { segments: 22 }));
+  moving.add(sbox(kit, 0.02, 0.04, 0.03, S, { at: [-0.028, 0.27, 0.02], rotDeg: [0, -35, 0], bevel: 0.003 }));
+  moving.add(kit.tube([[-0.04, 0.27, 0.035], [-0.075, 0.27, 0.08], [-0.085, 0.27, 0.13], [-0.075, 0.27, 0.15]], 0.006, S, { segments: 18 }));
+  moving.add(revolve(kit, [[0, 0.0], [0.012, 0.0], [0.014, 0.012], [0.014, 0.105], [0.012, 0.117], [0, 0.117]], P.blackPoly, {
+    at: [-0.081, 0.27 - 0.058, 0.15], segments: 14,
+  }));
+  moving.add(kit.cyl(0.006, 0.006, 0.12, S, { at: [-0.081, 0.27, 0.15], segments: 10 }));
+  // Apagallamas cónico (M2A1).
+  moving.add(revolve(kit, [
+    [0.0198, 1.000], [0.024, 1.004], [0.024, 1.016], [0.031, 1.064], [0.031, 1.070], [0.0225, 1.070], [0.0225, 1.064], [0, 1.064],
+  ], D, { segments: 24 }));
+  moving.add(kit.cyl(0.0068, 0.0068, 0.001, P.hole, { at: [0, 1.0645, 0], segments: 14 }));
+
+  return {
+    fixed, moving,
+    muzzle: new THREE.Vector3(0, 1.070, 0),
+    frontMount: new THREE.Vector3(0, -0.060, -0.108),
+    rearMount: new THREE.Vector3(0, RY + 0.03, -0.108),
+    feedLeft: new THREE.Vector3(-(HW + 0.004), -0.165, 0.018),
+  };
+}

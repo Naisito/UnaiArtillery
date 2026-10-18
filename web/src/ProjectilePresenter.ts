@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { FlightResult, Vec3, Weapon } from './ballistics';
 import { BallisticsService } from './BallisticsService';
+import { projectileMeshNoseZ } from './models/projectiles';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { makeGlowSprite } from './render/PostFX';
 import { CraterLayer } from './vfx/CraterLayer';
@@ -111,22 +112,10 @@ export class ProjectilePresenter {
     // P0.1 hecho bien de nacimiento: el yield viaja con el FlightResult.
     this.yieldScale = Math.cbrt(flight.warheadTNTeq / 6.6);
 
-    // Malla: cuerpo cilíndrico + ojiva, orientada a +Z local.
-    const d = weapon.round.diameter;
-    const len = d * 6.5;
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(d / 2, d / 2, len * 0.7, 16),
-      new THREE.MeshStandardMaterial({ color: 0x4c5157, metalness: 0.65, roughness: 0.35 }),
-    );
-    const nose = new THREE.Mesh(
-      new THREE.ConeGeometry(d / 2, len * 0.3, 16),
-      new THREE.MeshStandardMaterial({ color: 0x394047, metalness: 0.6, roughness: 0.4 }),
-    );
-    body.rotation.x = Math.PI / 2; // eje del cilindro -> Z
-    nose.rotation.x = Math.PI / 2;
-    nose.position.z = len * 0.5;
+    // Malla (V2 · 3D-SMALL): modelo real del proyectil según arma y munición
+    // (models/projectiles), envuelto con la nariz en +Z local.
     this.mesh = new THREE.Group();
-    this.mesh.add(body, nose);
+    this.mesh.add(projectileMeshNoseZ(weapon, { tracer: opts.tracer }));
     this.mesh.visible = false;
 
     // Trazador: halo pequeño para que el proyectil se lea a kilómetros.

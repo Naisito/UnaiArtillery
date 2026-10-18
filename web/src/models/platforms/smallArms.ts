@@ -20,15 +20,12 @@
 import * as THREE from 'three';
 import type { PlatformBuilder, PlatformRig } from '../rig';
 import { DEG } from '../rig';
-import { buildM240Body, buildM4Body, buildPistolBody, smallPalette } from '../parts/small-guns';
+import { buildM240Body, buildM2Body, buildM4Body, buildPistolBody, smallPalette } from '../parts/small-guns';
 import {
-  ammoBox100, machineRestBase, machineRestRocker, makeTripodFollower, mgTripod, rifleSaddle,
+  ammoBox100, ammoCanM2A1, machineRestBase, machineRestRocker, makeTripodFollower, mgTripod, rifleSaddle,
   rifleTripodLegs, rifleTripodPan, testStandBase,
 } from '../parts/small-mounts';
-import { beltAlong, mergeStatic } from '../parts/small-util';
-import { placeholderRig } from './_placeholder';
-
-const tiny = { hullW: 0.3, hullL: 0.6, hullH: 0.1, pivotY: 0.1, pivotZ: 1.0, barrelR: 0.012 };
+import { beltAlong, mergeStatic, sbox } from '../parts/small-util';
 
 /** Fusiona por material cada nodo del rig por separado (sin cruzar pivotes). */
 function bake(kit: Parameters<PlatformBuilder>[0]['kit'], nodes: THREE.Object3D[]): void {
@@ -165,4 +162,66 @@ export const buildM240: PlatformBuilder = (ctx) => {
     },
   };
 };
-export const buildM2: PlatformBuilder = (ctx) => placeholderRig(ctx, { ...tiny, barrelL: 1.4 });
+// ============================================================================
+//  M2HB sobre trípode M3 con T&E y caja M2A1 en bandeja lateral
+// ============================================================================
+export const buildM2: PlatformBuilder = (ctx) => {
+  const { kit } = ctx;
+  const P = smallPalette(kit);
+  const root = new THREE.Group();
+  root.name = 'm2-rig';
+  const body = buildM2Body(kit, P);
+  const fm = body.frontMount, rm = body.rearMount;
+  // M3 desplegado (Wikipedia/TM): 14" de alto, 61.5" de ancho, 76" de largo.
+  const trunnionZ = 0.452;
+  const tri = mgTripod(kit, {
+    style: 'm3', headZ: 0.356, trunnionZ,
+    frontFoot: [0, 0.85, 0], rearFoot: [0.78, -1.08, 0],
+    rearPin: { y: rm.y - fm.y, z: rm.z - fm.z }, teMinDeg: -14, teMaxDeg: 6,
+  });
+  root.add(tri.mount);
+  const traverse = kit.group({ name: 'traverse' });
+  root.add(traverse);
+  traverse.add(tri.pintle, tri.teLower, tri.teUpper);
+  const elevation = kit.group({ name: 'elevation', at: [0, 0, trunnionZ] });
+  traverse.add(elevation);
+  const recoil = kit.group({ name: 'recoil' });
+  elevation.add(recoil);
+
+  // Bandeja con caja M2A1 a la izquierda (solidaria al cajón) y cinta M9.
+  const fl = body.feedLeft;
+  const can = ammoCanM2A1(kit, { at: [fl.x - 0.105, fl.y + 0.01, -0.185] });
+  body.fixed.add(can);
+  body.fixed.add(sbox(kit, 0.17, 0.33, 0.006, P.parkGreen, { at: [fl.x - 0.105, fl.y + 0.01, -0.188], bevel: 0.002 }));
+  for (const s of [-1, 1]) {
+    body.fixed.add(sbox(kit, 0.006, 0.33, 0.03, P.parkGreen, { at: [fl.x - 0.105 + s * 0.085, fl.y + 0.01, -0.175], bevel: 0.0015 }));
+  }
+  body.fixed.add(sbox(kit, 0.03, 0.05, 0.10, P.parkGreen, { at: [fl.x - 0.006, fl.y + 0.12, -0.14], bevel: 0.003 }));
+  body.fixed.add(beltAlong(kit, {
+    path: [[fl.x - 0.105, fl.y, 0.0], [fl.x - 0.085, fl.y, 0.045], [fl.x - 0.045, fl.y, 0.058], [fl.x - 0.012, fl.y, 0.03]],
+    count: 6, cartLen: 0.138, caseD: 0.0204, bulletD: 0.0130, bulletFrac: 0.29,
+    noseDir: [0, 1, 0], brass: P.brass, bullet: P.copper, link: P.park,
+    tip: kit.paint(0xb8261f, { roughness: 0.55, metalness: 0.1 }), tipEvery: 5,
+  }));
+
+  const gunAt = fm.clone().negate();
+  body.fixed.position.copy(gunAt);
+  elevation.add(body.fixed);
+  body.moving.position.copy(gunAt);
+  recoil.add(body.moving);
+
+  bake(kit, [root, tri.mount, traverse, tri.teUpper, elevation, recoil]);
+  const follow = makeTripodFollower(22);
+  return {
+    root, traverse, elevation, recoil,
+    muzzleLocal: body.muzzle.clone().add(gunAt),
+    recoilStrokeM: 0.026,
+    footprintM: tri.footprintM,
+    heightM: trunnionZ + gunAt.z + 0.15,
+    extraAnimated: [tri.mount, tri.teUpper],
+    animate(s) {
+      tri.mount.rotation.z = -follow(s.azimuthDeg) * DEG;
+      tri.updateTE(s.elevationDeg);
+    },
+  };
+};
