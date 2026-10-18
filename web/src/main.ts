@@ -11,7 +11,11 @@ import { createViewer, GoogleTiles } from './viewer';
 import { BallisticsService } from './BallisticsService';
 import { ThreeOverlay } from './render/ThreeOverlay';
 import { maybeAttachBloom } from './render/PostFX';
-import { VfxManager, puffPoolStats } from './vfx/effects';
+// === V2:VFX — calidad gráfica + medidor de rendimiento ===
+import { installQuality } from './render/quality';
+import { getPerfStats, installPerf, installPerfOverlay } from './render/perf';
+// === fin V2:VFX ===
+import { VfxManager } from './vfx/effects';
 import { AudioBoom } from './vfx/AudioBoom';
 import { CraterLayer } from './vfx/CraterLayer';
 import { TrajectoryPreview } from './TrajectoryPreview';
@@ -63,6 +67,17 @@ async function boot(): Promise<void> {
   });
   // === fin V2:3D-CORE ===
   const vfx = new VfxManager(overlay.enuRoot, (pos) => service.atmo.windAt(pos, 0));
+  // === V2:VFX — preajustes de calidad (Cesium + overlay) y medidor ===
+  installQuality({ viewer, overlay });
+  installPerf({
+    viewer,
+    threeGl: overlay.renderer.getContext(),
+    threeInfo: () => overlay.renderer.info.render,
+    particles: () => vfx.particleCount,
+    effects: () => vfx.effectCount,
+    overlaySkipped: () => overlay.skippedFrames,
+  });
+  // === fin V2:VFX ===
   const audio = new AudioBoom();
   // P-VIVO.1 — el pan estéreo gira con la cámara: heading real de Cesium.
   audio.headingProvider = () => Cesium.Math.toDegrees(viewer.camera.heading);
@@ -573,15 +588,14 @@ async function boot(): Promise<void> {
   }
   flyToBattery(false);
 
-  // P-PRO.8 — overlay de depuración de rendimiento (?stats=1): draw calls,
-  // memoria de geometrías/texturas y sprites vivos del pool. Sin dependencias.
-  let statsEl: HTMLDivElement | null = null;
-  let statsAcc = 0;
-  if (new URLSearchParams(window.location.search).get('stats') === '1') {
-    statsEl = document.createElement('div');
-    statsEl.id = 'statsOverlay';
-    document.body.appendChild(statsEl);
-  }
+  // P-PRO.8 — overlay de depuración de rendimiento (?stats=1).
+  // === V2:VFX — fps/frame-time, draw calls reales de Cesium y Three,
+  // partículas y calidad (render/perf.ts sustituye al contador de sprites).
+  installPerfOverlay(() => {
+    const info = overlay.renderer.info;
+    return `geo ${info.memory.geometries} · tex ${info.memory.textures} · cráteres ${craters.count}`;
+  });
+  // === fin V2:VFX ===
 
   // -- Bucle -------------------------------------------------------------------
   let last = performance.now();
@@ -604,16 +618,6 @@ async function boot(): Promise<void> {
     vfx.update(dt, overlay.cameraEnu());
     director.update(dt);
     cockpit.render(); // solo repinta si la puntería cambió
-    if (statsEl && (statsAcc += dt) > 0.25) {
-      statsAcc = 0;
-      const info = overlay.renderer.info;
-      const pool = puffPoolStats();
-      statsEl.textContent =
-        `three ${info.render.calls} calls · ${info.render.triangles} tris · ` +
-        `geo ${info.memory.geometries} · tex ${info.memory.textures} · ` +
-        `sprites ${pool.live} vivos / pool ${pool.created} (${pool.free} libres) · ` +
-        `cráteres ${craters.count}`;
-    }
   });
   viewer.scene.postRender.addEventListener(() => overlay.render());
 
@@ -685,7 +689,7 @@ async function boot(): Promise<void> {
   // V2 — asa de automatización/depuración: las capturas headless
   // (tools/shot.mjs --ready __uaReady) y la consola manejan la app con ella.
   Object.assign(window as unknown as Record<string, unknown>, {
-    __ua: { Cesium, viewer, service, overlay, piece, gun, panel, director, preview, vfx, craters, weather, hud, audio },
+    __ua: { Cesium, viewer, service, overlay, piece, gun, panel, director, preview, vfx, craters, weather, hud, audio, perf: getPerfStats },
     __uaReady: true,
   });
   console.log('[UnaiArtillery] listo — física validada, globo real, fuego a discreción');
