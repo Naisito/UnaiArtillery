@@ -8,9 +8,13 @@
 //  solve en cola — un preview obsoleto encolado se salta de verdad en vez de
 //  quemarse enteros (los mensajes son FIFO; sin este yield la cancelación
 //  siempre llegaría tarde).
+//
+//  V2 · PHYS: las trayectorias viajan EMPAQUETADAS (un Float64Array por
+//  vuelo, transferido sin copia — ver WorkerProtocol.packDeep); el servicio
+//  las desempaqueta con unpackDeep. El resto de la respuesta va tal cual.
 // ============================================================================
 import {
-  CancelMessage, WorkerRequest, WorkerResponse, executeRequest,
+  CancelMessage, WorkerRequest, WorkerResponse, executeRequest, packDeep,
 } from './ballistics/WorkerProtocol';
 
 const queue: WorkerRequest[] = [];
@@ -18,6 +22,11 @@ const cancelled = new Set<number>();
 let draining = false;
 
 function post(msg: WorkerResponse): void {
+  if (msg.ok) {
+    const { payload, transfer } = packDeep(msg.result);
+    (self as unknown as Worker).postMessage({ ...msg, result: payload }, transfer);
+    return;
+  }
   (self as unknown as Worker).postMessage(msg);
 }
 

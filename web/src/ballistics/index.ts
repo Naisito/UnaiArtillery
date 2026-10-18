@@ -1,12 +1,20 @@
 // Barrel del núcleo balístico (porte TS validado del /core C++).
 export { Vec3 } from './Vec3';
-export { Atmosphere } from './Atmosphere';
-export type { AtmoSample, WindProfilePoint, WindField, AtmosphereModel } from './Atmosphere';
+export {
+  Atmosphere, CALM_WIND, offsetWind, saturationVaporPressurePa, virtualTemperatureK,
+} from './Atmosphere';
+export type {
+  AtmoSample, WindProfilePoint, WindField, WindInto, AtmosphereModel, MetProfilePoint,
+} from './Atmosphere';
 export { Munition, RocketMotor, GuidanceSpec } from './Munition';
-export type { DragPoint, DragModel } from './Munition';
-export { G1_TABLE, G7_TABLE, sampleDragTable, sectionalDensityLbIn2 } from './DragTables';
-export { BallisticsSolver, SolverConfig } from './BallisticsSolver';
-export type { FlightResult, TrajectorySample } from './BallisticsSolver';
+export type { DragPoint, DragModel, SpinAero } from './Munition';
+export {
+  G1_TABLE, G7_TABLE, TableLookup, lookupOf, sampleDragTable, sectionalDensityLbIn2,
+} from './DragTables';
+export { BallisticsSolver, SolverConfig, gyroscopicStability } from './BallisticsSolver';
+export type {
+  FlightResult, TrajectorySample, IntegratorKind, SpinModel,
+} from './BallisticsSolver';
 export { WGS84, EnuFrame, geodeticToEcef, somiglianaGravity } from './Geodesy';
 export { Weapon, WeaponCatalog } from './WeaponCatalog';
 export type { WeaponId, CatalogVariant, ChargeZone } from './WeaponCatalog';

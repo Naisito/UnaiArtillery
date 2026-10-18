@@ -13,7 +13,7 @@
 //    * solveMRSI(): several rounds on different charges/branches timed so all
 //      of them impact within a fraction of a second.
 // ============================================================================
-import { Atmosphere } from './Atmosphere';
+import { Atmosphere, offsetWind } from './Atmosphere';
 import { BallisticsSolver, FlightResult, SolverConfig } from './BallisticsSolver';
 import { Weapon } from './WeaponCatalog';
 import { Vec3 } from './Vec3';
@@ -183,10 +183,11 @@ export class WeaponSystem {
     return this.solver.integrate(w.round, muzzlePos, v, targetEnu, order.fuze);
   }
 
-  /** Ground range achieved for a given elevation (helper for the solver). */
+  /** Ground range achieved for a given elevation (helper for the solver).
+   *  V2: integra sin guardar el camino (mismo alcance bit a bit). */
   rangeForElevation(w: Weapon, muzzlePos: Vec3, azimuthDeg: number, v0: number, elDeg: number): number {
     const v = WeaponSystem.launchVelocity(azimuthDeg, elDeg, v0);
-    return this.solver.integrate(w.round, muzzlePos, v).downrange;
+    return this.solver.integrateLight(w.round, muzzlePos, v).downrange;
   }
 
   /**
@@ -242,8 +243,11 @@ export class WeaponSystem {
     const sol = preferHighAngle ? bisect(hi, bestEl) : bisect(lo, bestEl);
     if (sol === null) return none;
 
-    const ord: FireOrder = { azimuthDeg, elevationDeg: sol, chargeIndex, v0Correction };
-    const fr = this.fire(w, muzzlePos, ord);
+    // TOF y velocidad de impacto no dependen del camino guardado (V2: ligero).
+    const frV = WeaponSystem.launchVelocity(
+      azimuthDeg, WeaponSystem.clampElevation(w, sol), v0,
+    );
+    const fr = this.solver.integrateLight(w.round, muzzlePos, frV);
     return {
       found: true,
       elevationDeg: sol,
@@ -298,10 +302,13 @@ export class WeaponSystem {
       );
 
       const atmo = this.atmo.clone();
-      atmo.windField = (pos, t) => baseWind(pos, t).add(gust);
+      // V2 — mismo campo base + ráfaga, con evaluador escalar (sin asignar).
+      atmo.windField = offsetWind(baseWind, gust);
       const solver = new BallisticsSolver(atmo, this.cfg);
       const v = WeaponSystem.launchVelocity(az, el, v0);
-      const fr = solver.integrate(w.round, muzzlePos, v, undefined, order.fuze);
+      const fr = collectFlights
+        ? solver.integrate(w.round, muzzlePos, v, undefined, order.fuze)
+        : solver.integrateLight(w.round, muzzlePos, v, undefined, order.fuze);
       impacts.push(fr.impactPoint);
       if (collectFlights) flights.push(fr);
     }
@@ -351,12 +358,11 @@ export class WeaponSystem {
       let solver = this.solver;
       if (extraWind) {
         const atmo = this.atmo.clone();
-        const base = this.atmo.windField;
-        atmo.windField = (pos, t) => base(pos, t).add(extraWind);
+        atmo.windField = offsetWind(this.atmo.windField, extraWind);
         solver = new BallisticsSolver(atmo, this.cfg);
       }
       const v = WeaponSystem.launchVelocity(order.azimuthDeg, elx, v0x);
-      return solver.integrate(w.round, muzzlePos, v);
+      return solver.integrateLight(w.round, muzzlePos, v);
     };
     const alongOf = (fr: FlightResult) =>
       fr.impactPoint.x * alongDir.x + fr.impactPoint.y * alongDir.y;

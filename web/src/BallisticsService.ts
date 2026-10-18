@@ -21,6 +21,7 @@ import {
   Atmosphere, DeterministicRng, MAX_RICOCHETS, Vec3, Weapon, WeaponCatalog, WeaponId,
   WindProfilePoint, grazingAngleDeg, normalFromHeights, reflectVelocity, shouldRicochet,
 } from './ballistics';
+import type { MetProfilePoint } from './ballistics';
 import type {
   DispersionErrors, DispersionPrediction, DispersionResult, FireOrder, FiringTable,
   FlightResult, MrsiRound, SolveResult, SolverConfig,
@@ -28,7 +29,7 @@ import type {
 import {
   AtmoSpec, CancelMessage, CompareEntry, RangeRing, SolverConfigSpec, TerrainSpec,
   WindSpec, WorkerRequest, WorkerRequestBody, WorkerResponse, executeRequest, hydrateCompare,
-  hydrateDispersion, hydrateFlightResult, windFieldOf,
+  hydrateDispersion, hydrateFlightResult, unpackDeep, windFieldOf,
 } from './ballistics/WorkerProtocol';
 
 export type { RangeRing, TerrainSpec } from './ballistics/WorkerProtocol';
@@ -205,6 +206,33 @@ export class BallisticsService {
     this.invalidateRangeCaches(); // T/P cambian la densidad y el alcance
   }
 
+  /**
+   * V2 · PHYS — humedad relativa de la columna (0..1; se acepta también
+   * 0..100 y se normaliza). 0 = aire seco OACI (el estándar de las tablas de
+   * tiro; default). El aire húmedo es algo menos denso: alarga el tiro.
+   */
+  setHumidity(relativeHumidity: number): void {
+    const rh = relativeHumidity > 1 ? relativeHumidity / 100 : relativeHumidity;
+    this.atmo.relativeHumidity = Math.min(1, Math.max(0, Number.isFinite(rh) ? rh : 0));
+    this.invalidateRangeCaches();
+  }
+
+  getHumidity(): number { return this.atmo.relativeHumidity; }
+
+  /**
+   * V2 · PHYS — columna meteorológica MEDIDA: temperatura (K) y/o humedad
+   * (0..1) por altitud SOBRE EL NIVEL DEL MAR (OJO: el perfil de viento va
+   * relativo a la batería; este no). [] vuelve a la ISA. Para Open-Meteo:
+   * un punto por nivel de presión con su altitudMslM, temperature_XXXhPa y
+   * relative_humidity_XXXhPa/100.
+   */
+  setMetProfile(points: MetProfilePoint[]): void {
+    this.atmo.setMetProfile(points);
+    this.invalidateRangeCaches();
+  }
+
+  getMetProfile(): MetProfilePoint[] { return this.atmo.getMetProfile(); }
+
   /** Velocidad del sonido a una altitud ENU (para el retardo del boom). */
   soundSpeedAt(altitudeM: number): number {
     return this.atmo.sample(Math.max(0, altitudeM + this.frame.heightM)).soundSpeed;
@@ -212,12 +240,17 @@ export class BallisticsService {
 
   // -- Serialización hacia el worker -----------------------------------------
   private atmoSpec(): AtmoSpec {
-    return {
+    const spec: AtmoSpec = {
       model: this.atmo.model,
       seaLevelTemperatureK: this.atmo.seaLevelTemperatureK,
       seaLevelPressurePa: this.atmo.seaLevelPressurePa,
       wind: this.windSpec,
     };
+    // V2 — solo si están activos (la clave de caché de tablas no cambia en seco).
+    if (this.atmo.relativeHumidity > 0) spec.relativeHumidity = this.atmo.relativeHumidity;
+    const met = this.atmo.getMetProfile();
+    if (met.length) spec.metProfile = met;
+    return spec;
   }
 
   private makeConfigSpec(overrides: SolverConfigSpec = {}): SolverConfigSpec {
@@ -275,7 +308,9 @@ export class BallisticsService {
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
-    if (msg.ok) p.resolve(msg.result);
+    // V2 · PHYS — las trayectorias llegan empaquetadas (Float64Array
+    // transferido): se desempaquetan aquí en Vec3 reales.
+    if (msg.ok) p.resolve(unpackDeep(msg.result));
     else if (msg.cancelled) p.reject(new SupersededError());
     else p.reject(new Error(msg.error));
   }
