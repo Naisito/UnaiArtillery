@@ -1,74 +1,74 @@
 // ============================================================================
-//  Cockpit.ts — Instrumentos de puntería de precisión.  [P-NEXT.1]
+//  Cockpit.ts — Instrumentos de puntería fina.  [P-NEXT.1 · rediseño V2]
 //
-//  Panel inferior-izquierdo con dos instrumentos dibujados en canvas:
-//    * ROSA DE AZIMUT — círculo de compás con aguja y rumbo numérico grande.
-//    * CUADRANTE DE ELEVACIÓN — arco 0-90º con la envolvente mín/máx del arma
-//      actual resaltada y aguja de QE.
+//  Dos instrumentos en canvas dentro del paso 4 (Solución de tiro):
+//    * ROSA DE AZIMUT — escala en la unidad principal (mil OTAN o grados),
+//      cardinales, aguja ámbar, marca cian de la demora al objetivo y
+//      lectura numérica central.
+//    * CUADRANTE DE ELEVACIÓN — arco 0–1600 mil (0–90°) con la envolvente
+//      del arma en cian, la frontera de rama alta (800 mil) punteada y la
+//      aguja de QE.
 //
-//  Posar el cursor encima y girar la RUEDA ajusta el valor: paso 0.5º, con
-//  Shift 0.05º (fino), con Ctrl 5º (grueso). Arrastrar también apunta.
-//  Sincronía bidireccional con ControlPanel: la rueda mueve los sliders
-//  (panel.setAim) y los sliders mueven las agujas (render() por frame lee el
-//  estado del panel y solo repinta si cambió).
+//  Posar el cursor encima y girar la RUEDA ajusta el valor: en milésimas
+//  10 mil (Shift 1 mil, Ctrl 100 mil); en grados 0.5° (Shift 0.05°, Ctrl 5°)
+//  — el comportamiento clásico. Arrastrar también apunta (con dos dedos,
+//  ajuste fino relativo). Sincronía bidireccional con ControlPanel: render()
+//  por frame solo repinta si algo cambió.
 // ============================================================================
 import { ControlPanel } from './ControlPanel';
+import { settings } from './settings';
+import { AngleUnit, fmtAngleValue, layStepDeg, toUnit } from './units';
 
 const COL = {
-  bg: 'rgba(20, 26, 32, 0.85)',
-  line: 'rgba(255, 255, 255, 0.14)',
-  text: '#e8eaed',
-  dim: '#9aa4ad',
-  accent: '#ffb545',
-  accent2: '#4dc3ff',
+  well: 'rgba(5, 8, 12, 0.85)',
+  wellEdge: 'rgba(148, 163, 184, 0.22)',
+  tick: 'rgba(148, 163, 184, 0.28)',
+  tickMajor: 'rgba(163, 175, 187, 0.75)',
+  text: '#e8edf2',
+  dim: '#6b7785',
+  dim2: '#a3afbb',
+  accent: '#f5a524',
+  info: '#38bdf8',
+  infoBand: 'rgba(56, 189, 248, 0.32)',
+  danger: '#ff4d4f',
 };
+const FONT_MONO = '"JetBrains Mono Variable", ui-monospace, Consolas, monospace';
+const FONT_DISPLAY = '"Barlow Condensed", "Inter Variable", sans-serif';
 
-const SIZE = 128;  // css px por instrumento
-const DPR = 2;     // trazo nítido
-
-function stepFor(ev: { shiftKey: boolean; ctrlKey: boolean }): number {
-  if (ev.ctrlKey) return 5.0;   // grueso
-  if (ev.shiftKey) return 0.05; // fino
-  return 0.5;
-}
+const W = 156;   // css px por instrumento
+const H = 148;
+const DPR = 2;
 
 export class Cockpit {
   private azCanvas!: HTMLCanvasElement;
   private elCanvas!: HTMLCanvasElement;
-  private lastAz = NaN;
-  private lastEl = NaN;
-  private lastMin = NaN;
-  private lastMax = NaN;
+  private lastKey = '';
 
   constructor(
     private readonly panel: ControlPanel,
     private readonly onAimChanged: () => void,
+    host: HTMLElement = panel.instrumentsHost,
+    /** Demora al objetivo (null si no hay) para la marca de la rosa. */
+    private readonly targetBearingDeg: () => number | null = () => null,
   ) {
-    const host = document.getElementById('cockpit')!;
-    host.innerHTML = '';
-
-    const title = document.createElement('h2');
-    title.textContent = 'Cockpit';
-    host.appendChild(title);
-
-    const row = document.createElement('div');
-    row.className = 'instruments';
-    this.azCanvas = this.makeInstrument(row, 'Azimut · rueda ±0.5º · Shift fino · Ctrl grueso');
-    this.elCanvas = this.makeInstrument(row, 'Elevación · rueda ±0.5º · Shift fino · Ctrl grueso');
-    host.appendChild(row);
-
+    host.textContent = '';
+    this.azCanvas = this.makeInstrument(host, 'cockpit-az', 'Rosa de azimut: rueda para ajustar (Shift fino, Ctrl grueso) o arrastra');
+    this.elCanvas = this.makeInstrument(host, 'cockpit-el', 'Cuadrante de elevación: rueda para ajustar (Shift fino, Ctrl grueso) o arrastra');
     this.bindAzimuth();
     this.bindElevation();
     this.render();
   }
 
-  private makeInstrument(parent: HTMLElement, title: string): HTMLCanvasElement {
+  private makeInstrument(parent: HTMLElement, testid: string, title: string): HTMLCanvasElement {
     const c = document.createElement('canvas');
-    c.width = SIZE * DPR;
-    c.height = SIZE * DPR;
-    c.style.width = `${SIZE}px`;
-    c.style.height = `${SIZE}px`;
-    c.title = title;
+    c.width = W * DPR;
+    c.height = H * DPR;
+    c.style.width = `${W}px`;
+    c.style.height = `${H}px`;
+    c.dataset.testid = testid;
+    c.dataset.tip = title;
+    c.setAttribute('role', 'img');
+    c.setAttribute('aria-label', title);
     parent.appendChild(c);
     return c;
   }
@@ -89,16 +89,16 @@ export class Cockpit {
       (ev) => {
         ev.preventDefault(); // Ctrl+rueda no debe hacer zoom del navegador
         const dir = ev.deltaY < 0 ? 1 : -1;
-        this.applyAim(this.panel.azimuthDeg + dir * stepFor(ev), this.panel.elevationDeg);
+        const step = layStepDeg(settings.angleUnit, ev, 'wheel');
+        this.applyAim(this.panel.azimuthDeg + dir * step, this.panel.elevationDeg);
       },
       { passive: false },
     );
-
     const aimFromPointer = (ev: PointerEvent) => {
       const r = c.getBoundingClientRect();
       const dx = ev.clientX - (r.left + r.width / 2);
       const dy = ev.clientY - (r.top + r.height / 2);
-      if (dx * dx + dy * dy < 25) return; // demasiado cerca del pivote
+      if (dx * dx + dy * dy < 36) return; // demasiado cerca del pivote
       const az = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
       this.applyAim(az, this.panel.elevationDeg);
     };
@@ -115,23 +115,20 @@ export class Cockpit {
       (ev) => {
         ev.preventDefault();
         const dir = ev.deltaY < 0 ? 1 : -1;
-        this.applyAim(this.panel.azimuthDeg, this.panel.elevationDeg + dir * stepFor(ev));
+        const step = layStepDeg(settings.angleUnit, ev, 'wheel');
+        this.applyAim(this.panel.azimuthDeg, this.panel.elevationDeg + dir * step);
       },
       { passive: false },
     );
-
     const aimFromPointer = (ev: PointerEvent) => {
       const r = c.getBoundingClientRect();
-      // Pivote del cuadrante: esquina inferior-izquierda (como se dibuja).
-      const px = r.left + 16;
-      const py = r.top + r.height - 16;
-      const dx = ev.clientX - px;
-      const dy = py - ev.clientY;
-      if (dx * dx + dy * dy < 25) return;
+      const { px, py } = this.quadrantPivot();
+      const dx = ev.clientX - (r.left + px / DPR);
+      const dy = r.top + py / DPR - ev.clientY;
+      if (dx * dx + dy * dy < 36) return;
       const el = (Math.atan2(dy, Math.max(1e-6, dx)) * 180) / Math.PI;
       this.applyAim(this.panel.azimuthDeg, el);
     };
-    // P-VIVO.11 — dos dedos = ajuste FINO relativo de la QE.
     this.bindDrag(c, aimFromPointer, (_dxPx, dyPx) => {
       this.applyAim(this.panel.azimuthDeg, this.panel.elevationDeg - dyPx * 0.02);
     });
@@ -139,8 +136,8 @@ export class Cockpit {
 
   /**
    * Arrastre con Pointer Events (ratón Y dedo: setPointerCapture +
-   * touch-action:none en CSS). P-VIVO.11: con DOS punteros activos el
-   * movimiento pasa a `fineMove` (ajuste relativo suave, el "Shift" táctil).
+   * touch-action:none en CSS). Con DOS punteros el movimiento pasa a
+   * `fineMove` (ajuste relativo suave, el "Shift" táctil).
    */
   private bindDrag(
     c: HTMLCanvasElement,
@@ -171,152 +168,212 @@ export class Cockpit {
   }
 
   // -- Pintado ------------------------------------------------------------------
-  /** Llamar cada frame: solo repinta si la puntería o la envolvente cambió. */
+  /** Llamar cada frame: solo repinta si la puntería, la envolvente, la
+   *  unidad o la demora al objetivo cambiaron. */
   render(): void {
     const w = this.panel.weapon();
     const az = this.panel.azimuthDeg;
     const el = this.panel.elevationDeg;
-    if (
-      az === this.lastAz && el === this.lastEl &&
-      w.minElevationDeg === this.lastMin && w.maxElevationDeg === this.lastMax
-    ) {
-      return;
-    }
-    this.lastAz = az;
-    this.lastEl = el;
-    this.lastMin = w.minElevationDeg;
-    this.lastMax = w.maxElevationDeg;
-    this.drawAzimuth(az);
-    this.drawElevation(el, w.minElevationDeg, w.maxElevationDeg);
+    const unit = settings.angleUnit;
+    const tb = this.targetBearingDeg();
+    const key = `${az}|${el}|${w.minElevationDeg}|${w.maxElevationDeg}|${unit}|${tb ?? ''}`;
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+    this.drawAzimuth(az, unit, tb);
+    this.drawElevation(el, w.minElevationDeg, w.maxElevationDeg, unit);
   }
 
-  private drawAzimuth(azDeg: number): void {
+  private drawAzimuth(azDeg: number, unit: AngleUnit, targetBearing: number | null): void {
     const ctx = this.azCanvas.getContext('2d')!;
-    const S = SIZE * DPR;
+    const S = W * DPR;
     const cx = S / 2;
-    const cy = S / 2;
-    const R = S / 2 - 6 * DPR;
-    ctx.clearRect(0, 0, S, S);
+    const cy = (H * DPR) / 2;
+    const R = Math.min(S, H * DPR) / 2 - 4 * DPR;
+    ctx.clearRect(0, 0, S, H * DPR);
 
-    // Dial.
-    ctx.fillStyle = COL.bg;
-    ctx.strokeStyle = COL.line;
-    ctx.lineWidth = DPR;
+    // Pozo con degradado radial.
+    const g = ctx.createRadialGradient(cx, cy - R * 0.3, R * 0.1, cx, cy, R);
+    g.addColorStop(0, 'rgba(22, 30, 40, 0.95)');
+    g.addColorStop(1, COL.well);
+    ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = COL.wellEdge;
+    ctx.lineWidth = DPR;
     ctx.stroke();
 
-    // Ticks cada 10º, mayores cada 30º, cardinales cada 90º.
-    for (let a = 0; a < 360; a += 10) {
-      const rad = ((a - 90) * Math.PI) / 180; // 0º arriba
-      const major = a % 30 === 0;
-      const r0 = R - (major ? 9 : 5) * DPR;
-      ctx.strokeStyle = major ? COL.dim : COL.line;
+    // Escala: en mil, menores cada 100 y mayores cada 800; en grados, 5/45.
+    const minor = unit === 'mil' ? 5.625 : 5;
+    const majorEvery = unit === 'mil' ? 8 : 9; // nº de menores por mayor (45°)
+    const n = Math.round(360 / minor);
+    for (let i = 0; i < n; i++) {
+      const a = i * minor;
+      const rad = ((a - 90) * Math.PI) / 180;
+      const major = i % majorEvery === 0;
+      const mid = !major && i % (majorEvery / 2) === 0;
+      const len = (major ? 9 : mid ? 6 : 3.5) * DPR;
+      ctx.strokeStyle = major ? COL.tickMajor : COL.tick;
       ctx.lineWidth = (major ? 1.4 : 1) * DPR;
       ctx.beginPath();
-      ctx.moveTo(cx + r0 * Math.cos(rad), cy + r0 * Math.sin(rad));
+      ctx.moveTo(cx + (R - 2 * DPR - len) * Math.cos(rad), cy + (R - 2 * DPR - len) * Math.sin(rad));
       ctx.lineTo(cx + (R - 2 * DPR) * Math.cos(rad), cy + (R - 2 * DPR) * Math.sin(rad));
       ctx.stroke();
     }
-    ctx.fillStyle = COL.dim;
-    ctx.font = `${10 * DPR}px "Segoe UI", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const rl = R - 17 * DPR;
+    ctx.font = `600 ${10 * DPR}px ${FONT_DISPLAY}`;
+    const rl = R - 18 * DPR;
     for (const [label, a] of [['N', 0], ['E', 90], ['S', 180], ['O', 270]] as const) {
       const rad = ((a - 90) * Math.PI) / 180;
-      ctx.fillStyle = label === 'N' ? COL.accent2 : COL.dim;
+      ctx.fillStyle = label === 'N' ? COL.info : COL.dim2;
       ctx.fillText(label, cx + rl * Math.cos(rad), cy + rl * Math.sin(rad));
     }
 
-    // Aguja.
+    // Demora al objetivo: marca cian en el borde.
+    if (targetBearing !== null) {
+      const rad = ((targetBearing - 90) * Math.PI) / 180;
+      const tip = R - 1 * DPR;
+      ctx.fillStyle = COL.danger;
+      ctx.beginPath();
+      ctx.moveTo(cx + tip * Math.cos(rad), cy + tip * Math.sin(rad));
+      const back = R - 9 * DPR;
+      const side = 0.07;
+      ctx.lineTo(cx + back * Math.cos(rad - side), cy + back * Math.sin(rad - side));
+      ctx.lineTo(cx + back * Math.cos(rad + side), cy + back * Math.sin(rad + side));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Aguja con halo.
     const rad = ((azDeg - 90) * Math.PI) / 180;
+    const tipR = R - 6 * DPR;
+    ctx.save();
+    ctx.shadowColor = 'rgba(245, 165, 36, 0.55)';
+    ctx.shadowBlur = 8 * DPR;
     ctx.strokeStyle = COL.accent;
     ctx.lineWidth = 2 * DPR;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(cx - 8 * DPR * Math.cos(rad), cy - 8 * DPR * Math.sin(rad));
-    ctx.lineTo(cx + (R - 12 * DPR) * Math.cos(rad), cy + (R - 12 * DPR) * Math.sin(rad));
+    ctx.moveTo(cx + 22 * DPR * Math.cos(rad), cy + 22 * DPR * Math.sin(rad));
+    ctx.lineTo(cx + tipR * Math.cos(rad), cy + tipR * Math.sin(rad));
     ctx.stroke();
-    // Punta.
+    ctx.restore();
     ctx.fillStyle = COL.accent;
     ctx.beginPath();
-    const tip = R - 10 * DPR;
-    ctx.arc(cx + tip * Math.cos(rad), cy + tip * Math.sin(rad), 2.4 * DPR, 0, Math.PI * 2);
+    ctx.arc(cx + tipR * Math.cos(rad), cy + tipR * Math.sin(rad), 2.6 * DPR, 0, Math.PI * 2);
     ctx.fill();
 
-    // Rumbo numérico grande.
+    // Lectura central.
+    ctx.fillStyle = 'rgba(5, 8, 12, 0.9)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 21 * DPR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = COL.wellEdge;
+    ctx.lineWidth = DPR;
+    ctx.stroke();
     ctx.fillStyle = COL.text;
-    ctx.font = `700 ${16 * DPR}px "Segoe UI", sans-serif`;
-    ctx.fillText(`${azDeg.toFixed(1)}º`, cx, cy + 14 * DPR);
+    ctx.font = `500 ${12 * DPR}px ${FONT_MONO}`;
+    ctx.fillText(fmtAngleValue(azDeg, unit, unit === 'mil' ? 0 : 1).replace(' ', ''), cx, cy + 1 * DPR);
     ctx.fillStyle = COL.dim;
-    ctx.font = `${8.5 * DPR}px "Segoe UI", sans-serif`;
-    ctx.fillText('AZIMUT', cx, cy - 13 * DPR);
+    ctx.font = `600 ${7.5 * DPR}px ${FONT_DISPLAY}`;
+    ctx.fillText(unit === 'mil' ? 'AZ · MIL' : 'AZ · GRAD', cx, cy - 11 * DPR);
   }
 
-  private drawElevation(elDeg: number, minDeg: number, maxDeg: number): void {
+  /** Pivote del cuadrante (px de canvas): esquina inferior-izquierda. */
+  private quadrantPivot(): { px: number; py: number; R: number } {
+    const px = 14 * DPR;
+    const py = H * DPR - 14 * DPR;
+    const R = Math.min(W * DPR - px - 6 * DPR, py - 6 * DPR);
+    return { px, py, R };
+  }
+
+  private drawElevation(elDeg: number, minDeg: number, maxDeg: number, unit: AngleUnit): void {
     const ctx = this.elCanvas.getContext('2d')!;
-    const S = SIZE * DPR;
-    const px = 16 * DPR;          // pivote inferior-izquierdo
-    const py = S - 16 * DPR;
-    const R = S - 30 * DPR;
-    ctx.clearRect(0, 0, S, S);
+    const S = W * DPR;
+    const { px, py, R } = this.quadrantPivot();
+    ctx.clearRect(0, 0, S, H * DPR);
+    const radOf = (deg: number) => (-deg * Math.PI) / 180; // 0°→derecha, + arriba
 
-    const radOf = (deg: number) => (-deg * Math.PI) / 180; // 0º→derecha, + hacia arriba
-
-    // Fondo del cuadrante.
-    ctx.fillStyle = COL.bg;
+    // Pozo del cuadrante.
+    const g = ctx.createRadialGradient(px, py, R * 0.1, px, py, R);
+    g.addColorStop(0, 'rgba(22, 30, 40, 0.95)');
+    g.addColorStop(1, COL.well);
+    ctx.fillStyle = g;
     ctx.beginPath();
     ctx.moveTo(px, py);
     ctx.arc(px, py, R, radOf(0), radOf(90), true);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = COL.line;
+    ctx.strokeStyle = COL.wellEdge;
     ctx.lineWidth = DPR;
     ctx.stroke();
 
-    // Envolvente mín/máx del arma (banda resaltada).
-    ctx.strokeStyle = 'rgba(77, 195, 255, 0.55)';
-    ctx.lineWidth = 5 * DPR;
+    // Envolvente del arma.
+    ctx.strokeStyle = COL.infoBand;
+    ctx.lineWidth = 6 * DPR;
     ctx.beginPath();
-    ctx.arc(px, py, R - 5 * DPR, radOf(minDeg), radOf(maxDeg), true);
+    ctx.arc(px, py, R - 6 * DPR, radOf(minDeg), radOf(maxDeg), true);
     ctx.stroke();
 
-    // Ticks cada 10º.
-    for (let a = 0; a <= 90; a += 10) {
-      const major = a % 30 === 0;
+    // Frontera de rama alta (45° = 800 mil), punteada.
+    ctx.setLineDash([3 * DPR, 3 * DPR]);
+    ctx.strokeStyle = 'rgba(163, 175, 187, 0.3)';
+    ctx.lineWidth = DPR;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + (R - 12 * DPR) * Math.cos(radOf(45)), py + (R - 12 * DPR) * Math.sin(radOf(45)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Escala: mil 100/400; grados 5/15.
+    const minor = unit === 'mil' ? 5.625 : 5;
+    const majorEvery = unit === 'mil' ? 4 : 3;
+    for (let i = 0; i * minor <= 90.0001; i++) {
+      const a = i * minor;
+      const major = i % majorEvery === 0;
       const rad = radOf(a);
-      const r0 = R - (major ? 11 : 8) * DPR;
-      ctx.strokeStyle = major ? COL.dim : COL.line;
+      const len = (major ? 9 : 4) * DPR;
+      ctx.strokeStyle = major ? COL.tickMajor : COL.tick;
       ctx.lineWidth = (major ? 1.4 : 1) * DPR;
       ctx.beginPath();
-      ctx.moveTo(px + r0 * Math.cos(rad), py + r0 * Math.sin(rad));
+      ctx.moveTo(px + (R - 2 * DPR - len) * Math.cos(rad), py + (R - 2 * DPR - len) * Math.sin(rad));
       ctx.lineTo(px + (R - 2 * DPR) * Math.cos(rad), py + (R - 2 * DPR) * Math.sin(rad));
       ctx.stroke();
     }
 
     // Aguja de QE.
-    const rad = radOf(elDeg);
+    const rad = radOf(Math.min(90, Math.max(0, elDeg)));
+    ctx.save();
+    ctx.shadowColor = 'rgba(245, 165, 36, 0.55)';
+    ctx.shadowBlur = 8 * DPR;
     ctx.strokeStyle = COL.accent;
     ctx.lineWidth = 2 * DPR;
+    ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(px, py);
-    ctx.lineTo(px + (R - 13 * DPR) * Math.cos(rad), py + (R - 13 * DPR) * Math.sin(rad));
+    ctx.lineTo(px + (R - 8 * DPR) * Math.cos(rad), py + (R - 8 * DPR) * Math.sin(rad));
     ctx.stroke();
+    ctx.restore();
     ctx.fillStyle = COL.accent;
     ctx.beginPath();
-    ctx.arc(px, py, 3 * DPR, 0, Math.PI * 2);
+    ctx.arc(px, py, 3.2 * DPR, 0, Math.PI * 2);
     ctx.fill();
 
-    // QE numérico grande + envolvente.
-    ctx.fillStyle = COL.text;
-    ctx.font = `700 ${16 * DPR}px "Segoe UI", sans-serif`;
+    // Lectura arriba-derecha + envolvente.
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
-    ctx.fillText(`${elDeg.toFixed(1)}º`, S - 6 * DPR, 8 * DPR);
     ctx.fillStyle = COL.dim;
-    ctx.font = `${8.5 * DPR}px "Segoe UI", sans-serif`;
-    ctx.fillText(`QE ${minDeg.toFixed(0)}–${maxDeg.toFixed(0)}º`, S - 6 * DPR, 26 * DPR);
+    ctx.font = `600 ${7.5 * DPR}px ${FONT_DISPLAY}`;
+    ctx.fillText(unit === 'mil' ? 'QE · MIL' : 'QE · GRAD', S - 4 * DPR, 4 * DPR);
+    ctx.fillStyle = COL.text;
+    ctx.font = `500 ${14 * DPR}px ${FONT_MONO}`;
+    ctx.fillText(fmtAngleValue(elDeg, unit, unit === 'mil' ? 0 : 1).replace(' ', ''), S - 4 * DPR, 15 * DPR);
+    ctx.fillStyle = COL.info;
+    ctx.font = `500 ${8.5 * DPR}px ${FONT_MONO}`;
+    const lo = toUnit(minDeg, unit).toFixed(0);
+    const hi = toUnit(maxDeg, unit).toFixed(0);
+    ctx.fillText(`${lo}–${hi}`, S - 4 * DPR, 34 * DPR);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
   }

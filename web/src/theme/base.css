@@ -1,0 +1,106 @@
+/* ==========================================================================
+   base.css — Reset, tipografía y utilidades de la interfaz V2.
+   ========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ua-bg-0);
+  color: var(--ua-text-1);
+  font: 400 var(--ua-fs-m) / 1.45 var(--ua-font-ui);
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection { background: rgba(245, 165, 36, 0.32); color: #fff; }
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--ua-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--ua-radius-s);
+}
+
+/* Barras de desplazamiento finas y discretas (WebKit + Firefox). */
+* { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, 0.22) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgba(148, 163, 184, 0.34); }
+
+/* Globo Cesium a pantalla completa; el overlay Three encima sin ratón. */
+#cesiumContainer { position: absolute; inset: 0; }
+canvas.three-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--ua-z-three);
+}
+/* Créditos de Cesium: el agente MAP los integra en su franja inferior; hasta
+   entonces se sacan de debajo del dock izquierdo (deben verse: licencia). */
+#cesiumContainer .cesium-viewer-bottom {
+  left: calc(var(--ua-left-dock-w) + 8px);
+  bottom: calc(var(--ua-bottomnav-h) + 2px);
+  opacity: 0.6;
+  transition: left var(--ua-dur) var(--ua-ease);
+}
+
+/* Iconos. */
+.ua-icon-wrap, .ua-silhouette-wrap { display: inline-flex; flex: none; line-height: 0; }
+.ua-icon { display: block; flex: none; }
+
+/* Números: SIEMPRE monoespaciados y tabulares. */
+.num, .ua-num, .ua-readout__value, kbd {
+  font-family: var(--ua-font-mono);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-feature-settings: 'tnum', 'zero';
+}
+
+.ua-eyebrow {
+  font: 600 11px / 1 var(--ua-font-display);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ua-text-3);
+}
+.ua-eyebrow[data-gloss] { cursor: help; }
+
+.ua-gloss, [data-gloss]:not(button):not(.ua-eyebrow):not(.ua-readout__label) {
+  cursor: help;
+  text-decoration: underline dotted rgba(148, 163, 184, 0.55);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+.ua-muted { color: var(--ua-text-3); }
+.ua-sr {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@keyframes ua-spin { to { transform: rotate(360deg); } }
+@keyframes ua-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes ua-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

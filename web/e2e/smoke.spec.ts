@@ -1,38 +1,46 @@
 // ============================================================================
-//  smoke.spec.ts — E2E de humo (P-NEXT.6, arnés común en utils.ts).
+//  smoke.spec.ts — E2E de humo (P-NEXT.6 · interfaz V2).
 //
 //  Vitest blinda la física; esto verifica que la APP ARRANCA: globo Cesium +
-//  overlay Three vivos, panel con arsenal, el arco de preview llega a
-//  resolverse (readout "→ … km") y Fuego activa el HUD con el TOF avanzando.
-//  Cualquier error de consola no esperado (imports rotos, APIs de Cesium
-//  cambiadas, overlay caído) hace fallar el test. Corre sin token de ion
-//  (modo OSM) o con él, indistintamente.
+//  overlay Three vivos, estación de tiro montada (barra superior, misión de
+//  fuego, dock de datos), Arsenal con las 14 armas, el preview resuelto en la
+//  tira de datos de tiro y FUEGO activando la telemetría con el TOF
+//  avanzando. Cualquier error de consola no esperado hace fallar el test.
 // ============================================================================
 import { expect, test } from '@playwright/test';
-import { bootApp, collectErrors, waitForPreview } from './utils';
+import { SEL, bootApp, collectErrors, tid, waitForPreview } from './utils';
 
 test('smoke: arranca, previsualiza y dispara sin errores de consola', async ({ page }) => {
   const errors = collectErrors(page);
+  await page.addInitScript(() => localStorage.setItem('unai-artillery/tutorial/v1', 'done'));
 
   await bootApp(page);
 
-  // Selector de armas con 4+ opciones y arco de preview resuelto.
-  const weaponOptions = page.locator('#controlPanel select').first().locator('option');
-  expect(await weaponOptions.count()).toBeGreaterThanOrEqual(4);
+  // Estación montada: estado de misión, batería en MGRS, pasos y pestañas.
+  await expect(page.locator(tid('mission-status'))).toContainText(/Listo/i);
+  await expect(page.locator(tid('battery-coord'))).toHaveText(/^\d{1,2}[C-X] [A-Z]{2} \d{5} \d{5}$/);
+  for (const step of ['step-weapon', 'step-ammo', 'step-target', 'step-solution', 'step-fire']) {
+    await expect(page.locator(tid(step))).toBeVisible();
+  }
+
+  // Arsenal: 14 sistemas en 5 categorías.
+  await page.locator(SEL.arsenalOpen).click();
+  await expect(page.locator('[data-testid^="arsenal-item-"]')).toHaveCount(14);
+  await page.keyboard.press('Escape');
+  await expect(page.locator(tid('arsenal'))).toBeHidden();
+
+  // Preview resuelto (alcance en la tira de datos de tiro).
   await waitForPreview(page);
 
-  // Fuego: el HUD se activa y el TOF avanza.
-  await page.getByRole('button', { name: 'Fuego', exact: true }).click();
-  const hud = page.locator('#hud.active');
-  await expect(hud).toBeVisible({ timeout: 60_000 });
-  const tofCell = page.locator('#hud .cell .v').first();
-  await expect(tofCell).not.toHaveText('—', { timeout: 20_000 });
-  const t1 = parseFloat((await tofCell.innerText()).replace(',', '.'));
-  await expect
-    .poll(async () => parseFloat((await tofCell.innerText()).replace(',', '.')), {
-      timeout: 15_000,
-    })
-    .toBeGreaterThan(t1);
+  // Fuego: la telemetría se activa y el TOF avanza.
+  await page.locator(SEL.fire).click();
+  const tel = page.locator(`${SEL.telemetry}[data-state="active"]`);
+  await expect(tel).toBeVisible({ timeout: 90_000 });
+  const tof = page.locator(SEL.telTof);
+  await expect(tof).not.toHaveText('—', { timeout: 30_000 });
+  const t1 = parseFloat(await tof.innerText());
+  await expect.poll(async () => parseFloat(await tof.innerText()), { timeout: 20_000 }).toBeGreaterThan(t1);
+  await expect(page.locator(tid('mission-status'))).toContainText(/En vuelo/i);
 
   // Ningún error de consola inesperado en todo el recorrido.
   expect(errors).toEqual([]);
