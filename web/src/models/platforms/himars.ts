@@ -193,7 +193,7 @@ function materials(kit: ModelKit): Mats {
     pod: kit.paint(0x4d5528, { wear: 0.3, roughness: 0.7 }),
     podCover: kit.paint(0x5a6638, { wear: 0.2, roughness: 0.62 }),
     podPrsm: kit.paint(0x575d38, { wear: 0.2, roughness: 0.64 }),
-    chassis: kit.paint(0x24261f, { wear: 0.6, roughness: 0.82, metalness: 0.3 }),
+    chassis: kit.paint(0x363c1f, { wear: 0.65, roughness: 0.85, metalness: 0.25 }),
     dark: kit.paint(0x15160f, { roughness: 0.9, metalness: 0.1 }),
     steel: kit.steel(),
     bright: kit.steel(0x8a8d8c, { roughness: 0.35 }),
@@ -201,7 +201,7 @@ function materials(kit: ModelKit): Mats {
     glass: kit.glass(),
     yellow: kit.paint(0xc9a92c, { roughness: 0.6, metalness: 0.1 }),
     brown: kit.paint(0x6a4526, { roughness: 0.65, metalness: 0.1 }),
-    white: kit.paint(0xd9d8cc, { roughness: 0.7, metalness: 0.05 }),
+    white: kit.paint(0xb9b8aa, { roughness: 0.8, metalness: 0.05 }),
     stencil: kit.paint(0x2e3226, { roughness: 0.85, metalness: 0.05 }),
     red: kit.emissive(0xb01a10, 0.35),
     amber: kit.emissive(0xd88412, 0.3),
@@ -458,11 +458,20 @@ function boltRowFront(kit: ModelKit, M: Mats, g: THREE.Group, fy: number): void 
 // ---------------------------------------------------------------------------
 
 function buildRearBody(kit: ModelKit, M: Mats, g: THREE.Group): void {
-  // Plataforma sobre los largueros (subchasis del LM) con brazolas.
-  const dy0 = CAB_R, dy1 = -3.48;
-  g.add(kit.box(1.6, dy0 - dy1, 0.08, M.body, { at: [0, (dy0 + dy1) / 2, DECK_Z - 0.04] }));
+  // Bastidor del LM ("pallet") sobre los largueros: dos vigas cajón con
+  // travesaños, placa de asiento del aro y pasarelas de rejilla.
+  const dy0 = CAB_R - 0.05, dy1 = -3.46;
   for (const s of [-1, 1] as const) {
-    g.add(kit.box(0.06, dy0 - dy1, 0.16, M.body, { at: [s * 0.8, (dy0 + dy1) / 2, DECK_Z - 0.06] }));
+    g.add(cbox(kit, M.body, 0.16, dy0 - dy1, 0.1, 0.012, { at: [s * 0.45, (dy0 + dy1) / 2, DECK_Z - 0.05] }));
+  }
+  for (const y of [0.95, 0.2, -0.55, -3.3]) {
+    g.add(kit.box(1.5, 0.1, 0.08, M.body, { at: [0, y, DECK_Z - 0.06] }));
+  }
+  g.add(cbox(kit, M.body, 2.06, 2.3, 0.06, 0.02, { at: [0, AXIS_Y, DECK_Z - 0.03] }));
+  for (const s of [-1, 1] as const) {
+    // Pasarela de rejilla entre la cabina y el aro (lado exterior).
+    g.add(kit.box(0.4, 1.3, 0.03, M.chassis, { at: [s * 0.62, 0.35, DECK_Z - 0.02] }));
+    for (let i = 0; i < 6; i++) g.add(kit.box(0.4, 0.015, 0.012, M.body, { at: [s * 0.62, -0.2 + i * 0.22, DECK_Z + 0.002] }));
   }
   // Aro de rodadura fijo con tornillería.
   const ay = AXIS_Y;
@@ -535,10 +544,16 @@ function buildLauncherBase(kit: ModelKit, M: Mats, g: THREE.Group): void {
   g.add(kit.cyl(0.92, 0.92, 0.08, M.body, { axis: 'z', at: [0, 0, RING_Z + 0.04], segments: 40 }));
   const z0 = RING_Z + 0.08;
   const h = BASE_TOP - z0;
-  // Bloque trasero (con muñoneras) + vigas laterales; los gatos van en medio.
-  g.add(cbox(kit, M.body, 1.9, 0.75, h, 0.03, { at: [0, -1.22, z0 + h / 2] }));
+  // Plataforma en tres franjas (los gatos asoman por dos ranuras), testera
+  // trasera baja (libra el giro de la caja) y morro achaflanado delante.
+  g.add(cbox(kit, M.body, 1.92, 0.6, h - 0.06, 0.03, { at: [0, -1.18, z0 + (h - 0.06) / 2] }));
+  g.add(cbox(kit, M.body, 0.62, 1.75, h, 0.06, { at: [0, -0.05, z0 + h / 2] }));
+  g.add(kit.box(0.5, 1.2, 0.012, M.panel, { at: [0, -0.15, z0 + h + 0.006] }));
+  g.add(kit.cyl(0.11, 0.11, 0.06, M.chassis, { axis: 'z', at: [0, 0.35, z0 + h + 0.03], segments: 14 }));
   for (const s of [-1, 1] as const) {
-    g.add(cbox(kit, M.body, 0.34, 1.75, h, 0.03, { at: [s * 0.78, 0.0, z0 + h / 2] }));
+    g.add(cbox(kit, M.body, 0.38, 1.75, h, 0.06, { at: [s * 0.71, -0.05, z0 + h / 2] }));
+    // Mangueras hidráulicas de los gatos.
+    g.add(kit.tube([[s * 0.32, -0.55, z0 + h], [s * 0.4, -0.7, z0 + h + 0.04], [s * 0.5, -0.9, z0 + h + 0.02]], 0.018, M.dark));
     // Orejas de los muñones con tapa de cojinete.
     g.add(kit.extrudeSide([
       [PIV_Y - 0.22, BASE_TOP - 0.02], [PIV_Y + 0.22, BASE_TOP - 0.02], [PIV_Y + 0.1, PIV_Z + 0.1], [PIV_Y - 0.1, PIV_Z + 0.1],
@@ -594,10 +609,17 @@ function buildLauncherBox(kit: ModelKit, M: Mats, g: THREE.Group): void {
       { at: [s * 0.58, 0, 0] }));
   }
   g.add(kit.cyl(0.05, 0.05, 1.42, M.steel, { axis: 'x', segments: 14 }));
-  // Herrajes inferiores de los gatos.
+  // Herrajes inferiores de los gatos y nervios bajo el suelo.
   for (const s of [-1, 1] as const) {
     g.add(kit.box(0.16, 0.24, 0.08, M.body, { at: [s * JACK_X, JACK_BOX[0], BOX_Z0 - 0.02] }));
+    g.add(kit.box(0.08, L - 0.4, 0.05, M.body, { at: [s * 0.72, yc + 0.1, BOX_Z0 - 0.02] }));
+    g.add(kit.box(0.06, L - 0.6, 0.04, M.body, { at: [s * 0.25, yc + 0.2, BOX_Z0 - 0.015] }));
   }
+  for (let i = 0; i < 6; i++) {
+    g.add(kit.box(BOX_HW * 2 - 0.1, 0.06, 0.04, M.body, { at: [0, 0.35 + i * 0.75, BOX_Z0 - 0.015] }));
+  }
+  g.add(cbox(kit, M.panel, 0.5, 0.7, 0.1, 0.02, { at: [0, 3.4, BOX_Z0 - 0.04] }));
+  g.add(kit.tube([[-0.6, 0.3, BOX_Z0 - 0.03], [-0.62, 1.8, BOX_Z0 - 0.04], [-0.55, 3.2, BOX_Z0 - 0.03]], 0.02, M.dark));
 
   // Pluma de recarga plegada: dos brazos en U cerrada por delante, con
   // carro del polipasto, cilindros de despliegue y bisagras traseras.

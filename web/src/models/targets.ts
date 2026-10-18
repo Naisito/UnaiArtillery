@@ -305,9 +305,6 @@ function uralBed(kit: ModelKit, M: UralMats, g: THREE.Group): void {
       g.add(kit.box(0.025, 0.07, sideH, M.body, { at: [s * (U_BED_HW + 0.012), y, U_FLOOR + sideH / 2] }));
       g.add(kit.box(0.04, 0.12, 0.04, M.chassis, { at: [s * (U_BED_HW + 0.02), y, U_FLOOR + 0.04] }));
     }
-    // Guardabarros del tándem (chapa plana bajo la caja) y estribo.
-    g.add(kit.box(0.46, 3.0, 0.03, M.body, { at: [s * 1.0, (U_YR1 + U_YR2) / 2, 1.3] }));
-    g.add(kit.box(0.03, 3.0, 0.12, M.body, { at: [s * 1.22, (U_YR1 + U_YR2) / 2, 1.25] }));
   }
   g.add(kit.box(U_BED_HW * 2, 0.05, sideH + 0.25, M.body, { at: [0, U_BED_F - 0.025, U_FLOOR + (sideH + 0.25) / 2] }));
   g.add(kit.box(U_BED_HW * 2, 0.05, sideH, M.body, { at: [0, U_BED_R + 0.025, U_FLOOR + sideH / 2] }));
