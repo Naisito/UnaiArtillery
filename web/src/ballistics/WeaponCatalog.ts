@@ -415,7 +415,7 @@ export class WeaponCatalog {
       m.motor.burnTime = 16.0;
       m.motor.propellantMass = 732.0;
       m.dragModel = 'G7';
-      m.ballisticCoefficient = 11.94; // calibrado: 300 km (Block IA, esférico)
+      m.ballisticCoefficient = 12.13; // calibrado: 300 km (Block IA, esférico, QE ≤ 60°)
       m.guidance.enabled = true;
       m.guidance.navConstant = 3.0;
       m.guidance.maxLateralG = 5.0;
@@ -425,7 +425,7 @@ export class WeaponCatalog {
     w.name = variant === 'legacy' ? 'Tactical Ballistic Missile' : 'M270A1 / ATACMS Block IA';
     w.category = 'Missile';
     w.minElevationDeg = 30.0;
-    w.maxElevationDeg = 80.0;
+    w.maxElevationDeg = variant === 'legacy' ? 80.0 : 60.0; // V2: el LLM de M270/HIMARS no pasa de 60°
     w.traverseDeg = 360.0;
     w.reloadTime = 20.0;
     w.round = m;
@@ -604,7 +604,7 @@ export class WeaponCatalog {
     m.motor.burnTime = 20.0;   // s
     m.motor.propellantMass = 509.0;
     m.dragModel = 'G7';
-    m.ballisticCoefficient = 16.97; // calibrado: ~500 km (esférico)
+    m.ballisticCoefficient = 17.39; // calibrado: ~500 km (esférico, QE ≤ 60°)
     m.guidance.enabled = true;
     m.guidance.navConstant = 3.0;
     m.guidance.maxLateralG = 5.0;
@@ -614,7 +614,7 @@ export class WeaponCatalog {
     w.name = 'PrSM (clase)';
     w.category = 'Missile';
     w.minElevationDeg = 30.0;
-    w.maxElevationDeg = 80.0;
+    w.maxElevationDeg = 60.0; // V2: el lanzador de HIMARS/M270 no pasa de 60°
     w.traverseDeg = 360.0;
     w.reloadTime = 25.0;
     w.round = m;

@@ -18,7 +18,9 @@ export type {
 export { WGS84, EnuFrame, geodeticToEcef, somiglianaGravity } from './Geodesy';
 export { Weapon, WeaponCatalog } from './WeaponCatalog';
 export type { WeaponId, CatalogVariant, ChargeZone } from './WeaponCatalog';
-export { WeaponSystem, defaultFireOrder, v0Factor, V0_TEMP_COEFF_PER_C } from './WeaponSystem';
+export { WeaponSystem, defaultFireOrder, perturbRound, v0Factor, V0_TEMP_COEFF_PER_C } from './WeaponSystem';
+export { dispersionModel, probableError } from './Dispersion';
+export type { DispersionModel } from './Dispersion';
 export type {
   FireOrder, SolveResult, DispersionErrors, DispersionResult, DispersionPrediction, MrsiRound,
   FuzeMode, FuzeSpec, V0Correction,
