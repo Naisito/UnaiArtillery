@@ -16,3 +16,6 @@ Saved/
 # SO
 Thumbs.db
 .DS_Store
+
+# Worktrees de agentes (Claude Code)
+.claude/
