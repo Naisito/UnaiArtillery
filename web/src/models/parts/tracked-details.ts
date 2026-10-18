@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import type { ModelKit, V3 } from '../kit';
 import { PAINT } from '../kit';
-import { latheCrisp, rod } from './tracked-geo';
+import { latheCrisp, lowTorus, rod } from './tracked-geo';
 
 type Obj = THREE.Object3D;
 
@@ -68,7 +68,7 @@ export function towHook(kit: ModelKit, parent: Obj, at: V3, paint: THREE.Materia
   const g = frame(kit, parent, at, yawDeg);
   const steel = kit.steel(PAINT.darkSteel, { roughness: 0.5 });
   g.add(kit.box(0.16, 0.08, 0.16, paint, { at: [0, 0.04, 0], bevel: 0.015 }));
-  const hook = kit.torus(0.07, 0.022, steel, { axis: 'x', at: [0, 0.14, 0.0], segments: 14 });
+  const hook = lowTorus(kit, 0.07, 0.022, steel, { axis: 'x', at: [0, 0.14, 0.0], segments: 12, sides: 6 });
   g.add(hook);
   g.add(kit.box(0.04, 0.08, 0.04, steel, { at: [0, 0.09, -0.05] }));
 }
@@ -77,7 +77,7 @@ export function towHook(kit: ModelKit, parent: Obj, at: V3, paint: THREE.Materia
 export function liftEye(kit: ModelKit, parent: Obj, at: V3, mat: THREE.Material, yawDeg = 0, r = 0.045): void {
   const g = frame(kit, parent, at, yawDeg);
   g.add(kit.box(r * 1.6, 0.025, r * 0.9, mat, { at: [0, 0, r * 0.45] }));
-  g.add(kit.torus(r, r * 0.28, mat, { axis: 'y', at: [0, 0, r * 1.1], segments: 12 }));
+  g.add(lowTorus(kit, r, r * 0.28, mat, { axis: 'y', at: [0, 0, r * 1.1], segments: 10 }));
 }
 
 /** Asidero en U entre dos puntos sobre una cara (normal `n`, saliente `h`). */
@@ -197,7 +197,7 @@ export function duffel(kit: ModelKit, parent: Obj, at: V3, len: number, r: numbe
   // Correas.
   const strap = kit.polymer(0x2d2b22);
   for (const x of [-len * 0.28, len * 0.28]) {
-    g.add(kit.torus(r * 1.01, 0.008, strap, { axis: 'x', at: [x, 0, 0], segments: 14 }));
+    g.add(kit.cyl(r * 1.02, r * 1.02, 0.022, strap, { axis: 'x', at: [x, 0, 0], segments: 14, open: true }));
   }
 }
 
@@ -314,7 +314,7 @@ export function towCable(kit: ModelKit, parent: Obj, a: V3, b: V3, side: 1 | -1)
   }
   parent.add(kit.tube(pts, 0.016, steel, { segments: 24 }));
   for (const p of [a, b]) {
-    parent.add(kit.torus(0.05, 0.016, steel, { axis: 'x', at: [p[0], p[1], p[2]], segments: 12 }));
+    parent.add(lowTorus(kit, 0.05, 0.016, steel, { axis: 'x', at: [p[0], p[1], p[2]], segments: 10 }));
   }
   // Abrazaderas.
   for (const t of [0.33, 0.66]) {

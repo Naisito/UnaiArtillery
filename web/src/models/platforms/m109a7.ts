@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { PAINT } from '../kit';
 import type { PlatformBuilder } from '../rig';
 import { buildRunningGear } from '../parts/tracks';
-import { bakeStatic, extrudeSideExact, keep, latheCrisp, loft, rod, type Ring } from '../parts/tracked-geo';
+import { bakeStatic, extrudeSideExact, keep, latheCrisp, loft, lowTorus, rod, type Ring } from '../parts/tracked-geo';
 import * as D from '../parts/tracked-details';
 
 // --- Cotas principales (m) ---------------------------------------------------
@@ -96,7 +96,7 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
   hull.add(kit.box(0.12, 0.05, 0.04, steel, { at: [-0.42, HULL.rear - 0.08, 1.18] }));
   // Pivote de remolque, argollas y estribos traseros.
   hull.add(kit.box(0.2, 0.14, 0.16, paint, { at: [0, HULL.rear - 0.07, 0.7], bevel: 0.015 }));
-  hull.add(kit.torus(0.06, 0.02, steel, { axis: 'z', at: [0, HULL.rear - 0.2, 0.72], segments: 14 }));
+  hull.add(lowTorus(kit, 0.06, 0.02, steel, { axis: 'z', at: [0, HULL.rear - 0.2, 0.72], segments: 12 }));
   for (const s of [-1, 1]) {
     D.towHook(kit, hull, [s * 0.75, HULL.rear, 0.72], paint, 180);
     D.tailLight(kit, hull, [s * 1.32, HULL.rear, 1.42], paint);
@@ -208,7 +208,15 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
     traverse.add(kit.box(0.3, 1.1, 0.5, paint, { at: [s * (sideX(-1.85) + 0.15), -1.85, 2.08], bevel: 0.03 }));
     traverse.add(kit.box(0.31, 1.0, 0.025, paintSoft, { at: [s * (sideX(-1.85) + 0.15), -1.85, 2.34] }));
     for (const y of [-2.2, -1.5]) traverse.add(kit.box(0.05, 0.05, 0.06, steel, { at: [s * (sideX(-1.85) + 0.31), y, 2.22] }));
+    // Barandilla de estiba sobre el cajón lateral con un petate amarrado.
+    const xr = s * (sideX(-1.85) + 0.27);
+    for (const y of [-2.35, -1.35]) traverse.add(rod(kit, [xr, y, 2.35], [xr, y, 2.62], 0.014, paint));
+    traverse.add(rod(kit, [xr, -2.35, 2.62], [xr, -1.35, 2.62], 0.014, paint));
+    D.duffel(kit, traverse, [s * (sideX(-1.85) + 0.13), -1.85, 2.47], 0.85, 0.11, kit.canvas(0x55543a), 90);
   }
+  // Carcasa del ventilador de extracción (techo, atrás a la derecha).
+  traverse.add(kit.box(0.42, 0.34, 0.12, paint, { at: [0.85, -1.65, 2.85 + 0.03], bevel: 0.025 }));
+  D.louverPanel(kit, traverse, [0.85, -1.65, 2.85 + 0.093], 0.32, 0.24, 4, paint, { horizontal: true });
 
   // Cesta/depósito trasero (estiba en la parte de atrás de la torre).
   traverse.add(kit.box(2.6, 0.42, 0.66, paint, { at: [0, -2.66, 2.2], bevel: 0.04 }));
@@ -293,7 +301,7 @@ export const buildM109A7: PlatformBuilder = (ctx) => {
     [0.128, 5.07], [0.128, 5.15], [0.0, 5.15],
   ], paint, { segments: 32 }));
   // Bridas del evacuador.
-  for (const y of [3.18, 3.84]) recoil.add(kit.torus(0.158, 0.012, paint, { at: [0, y, 0], segments: 28 }));
+  for (const y of [3.18, 3.84]) recoil.add(lowTorus(kit, 0.158, 0.012, paint, { at: [0, y, 0], segments: 28, sides: 4 }));
   // Culata (bloque de cierre) dentro de la torre.
   recoil.add(kit.box(0.52, 0.5, 0.5, steel, { at: [0, -0.8, 0], bevel: 0.03 }));
   // Freno de boca de doble deflector: tres placas unidas por arriba y abajo.

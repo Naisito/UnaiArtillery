@@ -275,6 +275,24 @@ export function latheCrisp(
   return kit.place(kit.mesh(latheCrispGeometry(profile, opts.segments ?? 32, opts.axis ?? 'y', opts.closed ?? false), mat), opts);
 }
 
+/**
+ * Toro de pocos polígonos (sección poligonal de `sides` lados) para argollas,
+ * ganchos y ojales pequeños: ~1/3 de los triángulos de kit.torus.
+ */
+export function lowTorus(
+  kit: ModelKit, R: number, r: number, mat: THREE.Material,
+  opts: PlaceOpts & { axis?: Axis; sides?: number; segments?: number } = {},
+): THREE.Mesh {
+  const n = opts.sides ?? 5;
+  // Contorno CCW en el plano (radio, eje) centrado en (R, 0).
+  const prof: Array<[number, number]> = [];
+  for (let i = 0; i < n; i++) {
+    const t = -Math.PI / 2 + (i / n) * Math.PI * 2;
+    prof.push([R + r * Math.cos(t), r * Math.sin(t)]);
+  }
+  return latheCrisp(kit, prof, mat, { ...opts, closed: true, segments: opts.segments ?? 12 });
+}
+
 // ---------------------------------------------------------------------------
 //  Corona dentada (rueda motriz)
 // ---------------------------------------------------------------------------
